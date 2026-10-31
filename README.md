@@ -97,19 +97,28 @@ Account type, enable Teams/Outlook, custom start pages (special Microsoft clouds
 * Answering is done in Teams' own call screen; the *Answer* button opens it and tries to press Accept automatically.
 * Microsoft can change their websites at any time; WorkDeck uses the real web apps, so it follows those changes.
 
-## 7. Privacy & security
+## 7. What has been tested (and what hasn't)
+
+**Automated, on real Android (emulators in GitHub Actions — Android 14 and Android 12, the real Android System WebView):**
+setup screen; both tabs load; keep-alive foreground service (with microphone + camera service types); Teams presents as desktop Chrome on Windows (user-agent, `navigator.platform`, client hints); the integration script is injected into Microsoft pages; the Teams service worker gets the notification shim; a web notification becomes an Android notification on the *Teams messages* channel; an incoming-call notification becomes a ringing call alert; WebRTC `getUserMedia` gets a live microphone track; the call is detected ("Teams call in progress" with speaker/earpiece buttons) and stays active with the app in the background; zoom buttons; the app stays alive 60 s in the background and after being swiped away from Recents, and the **same Teams page is still in memory** afterwards (no reload); the delivered release APK installs, runs and keeps its service. (These device tests found and fixed a real crash in the zoom *Fit* button.)
+
+**Automated in Chromium:** 19 tests of the page-integration script (notifications incl. clicks & service workers, identity, viewport/zoom, badges, mic tracking, blob downloads, call buttons, token isolation) and 34 checks of the URL-routing / call-detection logic.
+
+**Not tested (needs your phone and your Microsoft account):** signing in with a real account, receiving real Teams/Outlook messages, and a real two-person Teams call with sound on speaker/Bluetooth. Please try a short test call with a colleague first.
+
+## 8. Privacy & security
 
 * Everything stays on your phone. WorkDeck talks only to Microsoft's sites (and opens other links in your normal browser).
 * No ads, no analytics, no trackers, no backups of your sign-in (Android backup is disabled).
 * The page↔app bridge only accepts calls carrying a secret token that is injected **only** into Microsoft's own app & sign-in domains, so other websites (e.g. ads) can't post fake notifications or save files.
 
-## 8. Updating
+## 9. Updating
 
 Install a newer WorkDeck APK over the old one — **you stay signed in**. This only works if the new APK is signed with the **same signing key** as the installed one; otherwise Android refuses and you'd have to uninstall (and sign in again). Keep the signing key (`workdeck-release.p12` + password) safe — see below.
 
 ---
 
-## 9. For developers: build from source
+## 10. For developers: build from source
 
 ### Option A — Android Studio (easiest)
 1. Install [Android Studio](https://developer.android.com/studio).
