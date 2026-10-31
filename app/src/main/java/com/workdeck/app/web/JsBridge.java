@@ -146,6 +146,7 @@ final class JsBridge {
             @Override
             public void run() {
                 if ("ringing".equals(type)) Notifier.get(mApp).onRingtoneHeard(mTab.site);
+                else if ("unsupported_browser".equals(type)) mTab.onBrowserUnsupported();
             }
         });
     }

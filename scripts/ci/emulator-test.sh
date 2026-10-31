@@ -91,8 +91,11 @@ check "Teams page was kept alive in memory (not reloaded)" "[ \"$MARK\" = 4242 ]
 step "Crash check (logcat)"
 timeout 60 adb logcat -d > "$OUT/logcat-debug.txt"
 grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-debug.txt" | tail -60
-check "no crash in debug run" "! grep -q 'FATAL EXCEPTION' $OUT/logcat-debug.txt"
-grep -A25 "FATAL EXCEPTION" "$OUT/logcat-debug.txt" | head -60
+# Only WorkDeck's own process counts (other emulator apps crash now and then).
+crash_of_ours() { grep -A3 "FATAL EXCEPTION" "$1" | grep -q "Process: $PKG"; }
+check "no WorkDeck crash in debug run" "! crash_of_ours $OUT/logcat-debug.txt"
+grep -A3 "FATAL EXCEPTION" "$OUT/logcat-debug.txt" | grep "Process:" | sort | uniq -c | sed 's/^/  crashed process: /' | tee -a "$OUT/summary.txt"
+grep -A30 "Process: $PKG" "$OUT/logcat-debug.txt" | head -40 | tee -a "$OUT/summary.txt"
 
 if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
   step "Smoke-test the delivered release APK ($RELEASE_APK)"
@@ -103,8 +106,8 @@ if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
   run_setup_flow release
   timeout 60 adb logcat -d > "$OUT/logcat-release.txt"
   grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-release.txt" | tail -30
-  check "no crash in release run" "! grep -q 'FATAL EXCEPTION' $OUT/logcat-release.txt"
-  grep -A25 "FATAL EXCEPTION" "$OUT/logcat-release.txt" | head -60
+  check "no WorkDeck crash in release run" "! crash_of_ours $OUT/logcat-release.txt"
+  grep -A30 "Process: $PKG" "$OUT/logcat-release.txt" | head -40 | tee -a "$OUT/summary.txt"
 fi
 
 echo

@@ -124,11 +124,15 @@ public final class Notifier {
         if (!prefs.notificationsEnabled(site)) return;
         boolean isCall = site == Site.TEAMS && CallHeuristics.looksLikeIncomingCall(title, body, requireInteraction);
         if (isCall && prefs.callAlerts()) {
+            Log.i(TAG, site.key + ": incoming-call notification -> call alert");
             showCallAlert(site, jsId, title, body);
             return;
         }
         // The user is already looking at this site; the page shows its own in-app toast.
-        if (UiState.isLookingAt(site)) return;
+        if (UiState.isLookingAt(site)) {
+            Log.i(TAG, site.key + ": notification suppressed (site is on screen)");
+            return;
+        }
 
         String key = site.key + "|" + (tag == null || tag.isEmpty() ? "id:" + jsId : "tag:" + tag);
         final int id = idFor(key);
@@ -197,6 +201,7 @@ public final class Notifier {
     private void post(int id, Notification.Builder b) {
         try {
             mNm.notify(id, b.build());
+            Log.i(TAG, "posted notification " + id);
         } catch (SecurityException e) {
             Log.w(TAG, "notification permission missing", e);
         }

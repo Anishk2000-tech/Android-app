@@ -351,9 +351,16 @@ public final class BrowserTab {
         mPrefs.setViewMode(site, desktop ? Prefs.VIEW_DESKTOP : Prefs.VIEW_MOBILE);
         if (mWebView == null) return;
         mDesktop = desktop;
+        Log.i(TAG, site.key + ": view mode -> " + (desktop ? "desktop" : "mobile"));
         applySettings(mWebView, mDesktop, mPrefs.textZoom(site), site);
         registerScript();
-        reload();
+        // A fresh navigation (not reload) guarantees the new identity is used everywhere.
+        String url = mWebView.getUrl();
+        if (url != null && UrlRouter.isHttp(url) && !UrlRouter.isLogin(url)) {
+            loadUrl(url);
+        } else {
+            loadHome();
+        }
     }
 
     /** Re-applies the desktop page width preference (needs a reload to take effect). */
@@ -440,6 +447,12 @@ public final class BrowserTab {
         } else {
             evaluate("window.__wdPermissionResult && window.__wdPermissionResult()");
         }
+    }
+
+    /** The site says this browser engine is too old (outdated Android System WebView). */
+    void onBrowserUnsupported() {
+        Log.w(TAG, site.key + ": site reports unsupported browser (WebView " + UserAgents.chromeFull() + ")");
+        if (mHost != null) mHost.onBrowserOutdated(UserAgents.chromeMajor());
     }
 
     // ------------------------------------------------------------------ routing

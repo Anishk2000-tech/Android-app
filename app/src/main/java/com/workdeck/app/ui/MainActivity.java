@@ -189,6 +189,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     protected void onPause() {
         UiState.activityResumed = false;
+        android.util.Log.i("WorkDeck/Main", "paused");
         CookieManager.getInstance().flush();
         super.onPause();
     }
@@ -952,5 +953,42 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     public boolean isSiteVisible(Site site) {
         return UiState.activityResumed && mSite == site;
+    }
+
+    private static boolean sOutdatedShown;
+
+    @Override
+    public void onBrowserOutdated(String chromeMajor) {
+        if (sOutdatedShown || isFinishing()) return;
+        sOutdatedShown = true;
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.outdated_title)
+                .setMessage(getString(R.string.outdated_text, chromeMajor))
+                .setPositiveButton(R.string.outdated_update, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        openStore("com.google.android.webview");
+                    }
+                })
+                .setNeutralButton(R.string.outdated_chrome, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        openStore("com.android.chrome");
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void openStore(String pkg) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + pkg)));
+        } catch (ActivityNotFoundException e) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://play.google.com/store/apps/details?id=" + pkg)));
+            } catch (ActivityNotFoundException ignored) {
+            }
+        }
     }
 }

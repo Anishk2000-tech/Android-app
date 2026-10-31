@@ -43,6 +43,10 @@
     <string name="webview_missing_title">Android System WebView is needed</string>
     <string name="webview_missing_text">WorkDeck shows Teams and Outlook using Android System WebView, which is missing or disabled on this phone. Install or enable \"Android System WebView\" (or Google Chrome) from the Play Store, then reopen WorkDeck.</string>
     <string name="open_play_store">Open Play Store</string>
+    <string name="outdated_title">Please update Android System WebView</string>
+    <string name="outdated_text">Microsoft says this browser version is too old. WorkDeck uses your phone\'s Android System WebView (currently Chrome %1$s). Update \"Android System WebView\" and \"Google Chrome\" in the Play Store, then reopen WorkDeck.</string>
+    <string name="outdated_update">Update WebView</string>
+    <string name="outdated_chrome">Update Chrome</string>
 
     <!-- Routes -->
     <string name="route_speaker">Speaker</string>

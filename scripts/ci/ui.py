@@ -18,7 +18,8 @@ def adb(*args):
 
 
 def dump():
-    for _ in range(3):
+    # uiautomator often fails with "could not get idle state" while a WebView animates: retry.
+    for _ in range(6):
         adb("shell", "uiautomator", "dump", "/sdcard/ui.xml")
         xml = adb("shell", "cat", "/sdcard/ui.xml")
         start = xml.find("<?xml")

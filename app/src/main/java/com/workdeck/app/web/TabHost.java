@@ -36,4 +36,7 @@ public interface TabHost {
     void switchToSite(Site site, String url);
 
     boolean isSiteVisible(Site site);
+
+    /** A site reported that the WebView engine is too old. */
+    void onBrowserOutdated(String chromeMajor);
 }

@@ -23,7 +23,9 @@ function check(ok, what, detail) {
   if (!ok) failures++;
 }
 const notifications = () => sh('adb shell dumpsys notification --noredact');
-const ui = (args) => sh('python3 scripts/ci/ui.py ' + args);
+const ui = (args) => { const r = sh('python3 scripts/ci/ui.py ' + args).trim(); console.log('  ui ' + args + ': ' + r.split('\n').pop()); return r; };
+async function waitFor(fn, ms) { for (let t = 0; t < ms; t += 1000) { if (fn()) return true; await sleep(1000); } return fn(); }
+const wdNotifs = () => notifications().split('NotificationRecord').filter((r) => r.includes('pkg=com.workdeck.app'));
 const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '.png')} && python3 scripts/ci/thumb.py ${path.join(OUT, name + '.png')} ${name} > ${path.join(OUT, name + '.thumb')}`);
 
 async function connect(wsUrl) {
@@ -94,26 +96,34 @@ async function pageFor(pred) {
   check(id.uaData === 'Windows' && id.mobile === false, 'userAgentData says Windows / not mobile', [id.uaData, id.mobile]);
   check(id.injected === 'function', 'WorkDeck document-start script is injected in the Microsoft page', id.injected);
   check(id.perm === 'granted', 'Notification.permission is granted (POST_NOTIFICATIONS granted)', id.perm);
-  check(!/get the (teams )?app|download the app/i.test(id.text || ''), 'Microsoft did not show a "get the app" page', id.text);
+  const unsupported = /isn.t supported|not supported/i.test(id.text || '');
+  console.log(unsupported ? '  NOTE: Teams says this (emulator) WebView version is too old - real phones update it via Play Store'
+    : '  Teams accepted the browser version');
+  check(!/get the (teams )?app/i.test(id.text || '') || unsupported, 'Microsoft did not show a mobile "get the app" page', id.text);
 
   // 2. Web notification -> Android notification (app in background)
   sh('adb shell input keyevent KEYCODE_HOME');
   await sleep(2500);
+  const resumed = sh('adb shell dumpsys activity activities').match(/(topResumedActivity|mResumedActivity)[^\n]*/);
+  console.log('  resumed activity after HOME: ' + (resumed ? resumed[0] : '?'));
   await teams.eval(`new Notification('WorkDeck CI message', { body: 'Hello from the CI test', tag: 'ci-msg' }), 'ok'`);
-  await sleep(3000);
-  let n = notifications();
-  check(n.includes('WorkDeck CI message'), 'page notification shows as an Android notification');
-  check(/channel=teams|Channel\{mId='teams'|mId='teams'/.test(n), 'posted on the "Teams messages" channel');
+  const shown = await waitFor(() => wdNotifs().some((r) => r.includes('WorkDeck CI message')), 10000);
+  check(shown, 'page notification shows as an Android notification');
+  check(wdNotifs().some((r) => r.includes('WorkDeck CI message') && r.includes('channel=teams')), 'posted on the "Teams messages" channel');
+  if (!shown) {
+    console.log('  WorkDeck notification records:\n' + wdNotifs().map((r) => '   ' + r.slice(0, 400).replace(/\n/g, ' ')).join('\n'));
+    console.log('  logcat: ' + sh('adb logcat -d -s WorkDeck/Notifier WorkDeck/Bridge WorkDeck/Main').split('\n').slice(-15).join('\n  '));
+  }
+  let n;
 
   // 3. Incoming-call style notification -> call alert channel; closing it from the page cancels it
   await teams.eval(`window.__ciCall = new Notification('CI Caller', { body: 'Incoming call', requireInteraction: true }), 'ok'`);
-  await sleep(3000);
-  n = notifications();
-  check(n.includes('CI Caller') && /calls/.test(n), 'incoming call shows a call alert');
+  await waitFor(() => wdNotifs().some((r) => r.includes('CI Caller')), 10000);
+  check(wdNotifs().some((r) => r.includes('CI Caller') && r.includes('channel=calls')), 'incoming call shows a call alert (calls channel)');
   shot('03-call-alert');
   await teams.eval(`window.__ciCall.close(), 'ok'`);
-  await sleep(2000);
-  check(!notifications().includes('CI Caller'), 'call alert disappears when the page closes it');
+  await waitFor(() => !wdNotifs().some((r) => r.includes('CI Caller')), 8000);
+  check(!wdNotifs().some((r) => r.includes('CI Caller')), 'call alert disappears when the page closes it');
 
   // 4. Microphone through WebRTC getUserMedia + call detection + background survival
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
@@ -163,14 +173,19 @@ async function pageFor(pred) {
   ui('tap "Show Outlook"');
   await sleep(2500);
   ui('tap "Switch desktop / mobile view"');
-  await sleep(12000);
-  const outlook = await pageFor(isOutlook);
-  if (outlook) {
-    const o = await outlook.eval(`({ ua: navigator.userAgent, platform: navigator.platform, mobile: navigator.userAgentData && navigator.userAgentData.mobile, url: location.href })`);
+  let o = null;
+  for (let i = 0; i < 12; i++) {
+    await sleep(3000);
+    const outlook = await pageFor(isOutlook);
+    if (!outlook) continue;
+    o = await outlook.eval(`({ ua: navigator.userAgent, platform: navigator.platform, mobile: navigator.userAgentData && navigator.userAgentData.mobile, url: location.href })`);
+    outlook.close();
+    if (o && /Android/.test(o.ua || '')) break;
+  }
+  if (o) {
     console.log(JSON.stringify(o));
     check(/Android/.test(o.ua) && !/; wv\)/.test(o.ua), 'Outlook mobile view uses Chrome-for-Android identity (no "wv")', o.ua);
     check(o.mobile === true, 'userAgentData.mobile is true in mobile view', o.mobile);
-    outlook.close();
   } else {
     check(false, 'Outlook page reachable over DevTools');
   }

@@ -472,5 +472,18 @@
     });
   }
 
+  // Microsoft says the browser is too old -> ask native to suggest a WebView update.
+  if (isTop) {
+    var checkUnsupported = function () {
+      try {
+        var t = (document.body && document.body.innerText || '').slice(0, 4000);
+        if (/browser (version )?(isn't|is not|isn\u2019t) supported|unsupported browser|browser is no longer supported/i.test(t)) {
+          call('callSignal', 'unsupported_browser', location.host);
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('load', function () { setTimeout(checkUnsupported, 4000); setTimeout(checkUnsupported, 15000); });
+  }
+
   log('installed in ' + location.origin + (isTop ? ' (top)' : ' (frame)'));
 })();
