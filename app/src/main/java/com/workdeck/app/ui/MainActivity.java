@@ -102,6 +102,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private boolean mInPip;
     private boolean mShownForCall;
     private String mEnabledKey;
+    private int mNightMode;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -120,6 +121,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         WorkDeckApp.setMainActivity(this);
         mEnabledKey = enabledKey();
+        mNightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         setContentView(R.layout.activity_main);
         bindViews();
         setupInsets();
@@ -717,6 +719,16 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     }
 
     @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // Dark/light theme switched: rebuild the screen (the WebViews themselves survive).
+        if ((newConfig.uiMode & Configuration.UI_MODE_NIGHT_MASK) != mNightMode && mTabs != null && !mInPip) {
+            mNightMode = newConfig.uiMode & Configuration.UI_MODE_NIGHT_MASK;
+            recreate();
+        }
+    }
+
+    @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         mInPip = isInPictureInPictureMode;
@@ -863,13 +875,24 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     public boolean openPopup(BrowserTab opener, Message resultMsg, boolean userGesture) {
         if (mPopups.size() >= 4) return false;
-        WebView popup = opener.createPopupWebView(this);
+        final WebView popup = opener.createPopupWebView(this);
         mPopups.add(popup);
         popup.setVisibility(View.INVISIBLE);
         mPopupContainer.addView(popup);
         WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
         transport.setWebView(popup);
         resultMsg.sendToTarget();
+        // Script-filled windows (e.g. Outlook "pop out") never navigate anywhere:
+        // show them if no navigation decided their fate within a moment.
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (mPopups.contains(popup) && popup.getVisibility() == View.INVISIBLE) {
+                    String url = popup.getUrl();
+                    if (url == null || url.isEmpty() || url.startsWith("about:")) showPopup(popup);
+                }
+            }
+        }, 1500);
         return true;
     }
 

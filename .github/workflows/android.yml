@@ -50,7 +50,21 @@ jobs:
   device-test:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: android14-swiftshader
+            api: 34
+            gpu: swiftshader_indirect
+          - name: android14-swangle
+            api: 34
+            gpu: swangle_indirect
+          - name: android12-swiftshader
+            api: 31
+            gpu: swiftshader_indirect
+    name: device-test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
 
@@ -63,25 +77,31 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Tools for screenshots in the log
+        run: pip install --quiet pillow
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on Android 14 emulator
+      - name: Run on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          ram-size: 4096M
+          disk-size: 6000M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back emulated -camera-front emulated
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu ${{ matrix.gpu }} -no-boot-anim -no-snapshot-save -camera-back emulated -camera-front emulated
           script: bash scripts/ci/emulator-test.sh "$(ls apks/debug/*.apk | head -1)" "$(ls release/*.apk 2>/dev/null | head -1)"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: device-test-results
+          name: device-test-results-${{ matrix.name }}
           path: ci-out/

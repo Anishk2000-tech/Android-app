@@ -15,7 +15,7 @@ const OUT = process.argv[2] || 'ci-out';
 const PKG = 'com.workdeck.app';
 let failures = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const sh = (c) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { return String(e.stdout || '') + String(e.stderr || ''); } };
+const sh = (c) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }); } catch (e) { return String(e.stdout || '') + String(e.stderr || ''); } };
 function check(ok, what, detail) {
   console.log((ok ? 'PASS  ' : 'FAIL  ') + what + (detail !== undefined ? '  -> ' + JSON.stringify(detail) : ''));
   if (!ok) failures++;
@@ -37,8 +37,11 @@ async function connect(wsUrl) {
     send(method, params) {
       return new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params: params || {} })); });
     },
-    async eval(expr) {
-      const r = await this.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+    async eval(expr, timeoutMs) {
+      const r = await Promise.race([
+        this.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }),
+        sleep(timeoutMs || 30000).then(() => ({ result: { exceptionDetails: { exception: { description: 'timeout' } } } })),
+      ]);
       if (!r.result) return { __error: JSON.stringify(r.error) };
       if (r.result.exceptionDetails) return { __error: r.result.exceptionDetails.exception && r.result.exceptionDetails.exception.description };
       return r.result.result.value;
@@ -54,7 +57,7 @@ async function pages() {
   sh(`adb forward tcp:9222 localabstract:${m[1]}`);
   for (let i = 0; i < 10; i++) {
     try {
-      const list = await (await fetch('http://127.0.0.1:9222/json/list')).json();
+      const list = await (await fetch('http://127.0.0.1:9222/json/list', { signal: AbortSignal.timeout(10000) })).json();
       return list.filter((p) => p.type === 'page');
     } catch (e) { await sleep(1000); }
   }
@@ -71,8 +74,9 @@ async function pageFor(pred) {
   const list = await pages();
   console.log('WebView pages:\n' + list.map((p) => '  ' + p.url.slice(0, 140) + '  [' + p.title + ']').join('\n'));
   check(list.length >= 2, 'both Teams and Outlook WebViews are loaded', list.length);
-  const isTeams = (p) => /teams/i.test(decodeURIComponent(p.url));
-  const isOutlook = (p) => /outlook/i.test(decodeURIComponent(p.url)) && !isTeams(p);
+  const safe = (u) => { try { return decodeURIComponent(u); } catch (e) { return u; } };
+  const isTeams = (p) => /teams/i.test(safe(p.url));
+  const isOutlook = (p) => /outlook/i.test(safe(p.url)) && !isTeams(p);
   let teams = await pageFor(isTeams) || await pageFor(() => true);
   if (!teams) { console.log('no WebView page reachable over DevTools'); process.exit(1); }
 

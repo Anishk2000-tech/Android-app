@@ -11,7 +11,6 @@ import android.content.Intent;
 import android.content.MutableContextWrapper;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -139,7 +138,7 @@ public final class BrowserTab {
             // Keep the renderer alive and prioritized even when this tab is hidden.
             wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
         }
-        wv.setBackgroundColor(Color.TRANSPARENT);
+        wv.setBackgroundColor(mApp.getColor(R.color.wd_bg));
         wv.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         wv.addJavascriptInterface(new JsBridge(this, mApp, mToken), BRIDGE_NAME);
