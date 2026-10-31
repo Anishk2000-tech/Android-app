@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WorkDeck</string>
+    <string name="app_tagline">Teams and Outlook, without the official apps</string>
+    <string name="site_teams">Teams</string>
+    <string name="site_outlook">Outlook</string>
+
+    <!-- Main screen -->
+    <string name="desc_tab_teams">Show Teams</string>
+    <string name="desc_tab_outlook">Show Outlook</string>
+    <string name="desc_audio">Call audio output</string>
+    <string name="desc_view_mode">Switch desktop / mobile view</string>
+    <string name="desc_zoom">Zoom controls</string>
+    <string name="desc_menu">More options</string>
+    <string name="desc_show_bar">Show toolbar</string>
+    <string name="desc_close">Close</string>
+    <string name="desc_open_external">Open in browser</string>
+    <string name="desc_zoom_in">Zoom in</string>
+    <string name="desc_zoom_out">Zoom out</string>
+    <string name="zoom_fit">Fit</string>
+    <string name="text_smaller">A−</string>
+    <string name="text_bigger">A+</string>
+    <string name="text_size_value">Text %1$d%%</string>
+    <string name="desktop_width_value">Width %1$dpx</string>
+    <string name="view_desktop_now">Desktop view</string>
+    <string name="view_mobile_now">Mobile view</string>
+    <string name="view_teams_mobile_note">Mobile view (Teams keeps its desktop engine, in a phone-sized layout)</string>
+    <string name="error_title">Can\'t load this page</string>
+    <string name="error_hint">Check your internet connection. WorkDeck will retry automatically when the network is back.</string>
+    <string name="retry">Retry</string>
+    <string name="menu_reload">Reload</string>
+    <string name="menu_home">Go to start page</string>
+    <string name="menu_switch_desktop">Switch to desktop view</string>
+    <string name="menu_switch_mobile">Switch to mobile view</string>
+    <string name="menu_hide_bar">Hide toolbar (full screen)</string>
+    <string name="menu_open_browser">Open this page in browser</string>
+    <string name="menu_setup">Setup &amp; permissions</string>
+    <string name="menu_settings">Settings</string>
+    <string name="menu_quit">Quit WorkDeck</string>
+    <string name="bar_hidden_hint">Toolbar hidden. Tap the small arrow at the bottom to bring it back.</string>
+    <string name="tap_accept_in_teams">Tap Accept in Teams to answer</string>
+    <string name="choose_audio_output">Call audio output</string>
+    <string name="webview_missing_title">Android System WebView is needed</string>
+    <string name="webview_missing_text">WorkDeck shows Teams and Outlook using Android System WebView, which is missing or disabled on this phone. Install or enable \"Android System WebView\" (or Google Chrome) from the Play Store, then reopen WorkDeck.</string>
+    <string name="open_play_store">Open Play Store</string>
+
+    <!-- Routes -->
+    <string name="route_speaker">Speaker</string>
+    <string name="route_earpiece">Phone (earpiece)</string>
+    <string name="route_bluetooth">Bluetooth</string>
+    <string name="route_wired">Headset</string>
+    <string name="route_auto">Automatic</string>
+
+    <!-- Web permissions / links / downloads -->
+    <string name="no_app_for_link">No app can open this link</string>
+    <string name="mic_permission_needed">Microphone permission is needed for calls. Allow it in Setup &amp; permissions.</string>
+    <string name="site_permission_title">Allow camera / microphone?</string>
+    <string name="site_permission_message">%1$s wants to use your camera or microphone.</string>
+    <string name="allow">Allow</string>
+    <string name="deny">Deny</string>
+    <string name="download_started">Downloading %1$s…</string>
+    <string name="download_preparing">Preparing download…</string>
+    <string name="download_failed">Download failed</string>
+    <string name="download_done">Download complete</string>
+    <string name="download_saved">Saved to Downloads: %1$s</string>
+
+    <!-- Notifications -->
+    <string name="channel_service">Running in background</string>
+    <string name="channel_service_desc">Keeps Teams and Outlook connected so messages, mail and calls arrive. You can minimise this notification.</string>
+    <string name="channel_in_call">Ongoing call</string>
+    <string name="channel_teams">Teams messages</string>
+    <string name="channel_outlook">Outlook mail &amp; reminders</string>
+    <string name="channel_calls">Incoming calls</string>
+    <string name="channel_files">Downloads</string>
+    <string name="service_title">WorkDeck is connected</string>
+    <string name="service_text">%1$s</string>
+    <string name="service_text_idle">Waiting for messages and calls</string>
+    <string name="quit">Quit</string>
+    <string name="incoming_call">Incoming Teams call</string>
+    <string name="incoming_call_text">Tap to open Teams and answer</string>
+    <string name="answer">Answer</string>
+    <string name="decline">Decline</string>
+    <string name="call_in_progress">Teams call in progress</string>
+    <string name="call_audio_route">Audio: %1$s · tap to return to the call</string>
+
+    <!-- Setup -->
+    <string name="setup_title">Welcome to WorkDeck</string>
+    <string name="setup_intro">Use Microsoft Teams and Outlook on the web, with calls, notifications and desktop view. Set it up once in under a minute.</string>
+    <string name="setup_step_account">1. Your Microsoft account</string>
+    <string name="setup_account_work">Work or school account (Microsoft 365)</string>
+    <string name="setup_account_personal">Personal account (Outlook.com, Hotmail, Live, Teams free)</string>
+    <string name="setup_step_apps">2. What do you want to use?</string>
+    <string name="setup_step_permissions">3. Permissions</string>
+    <string name="setup_permissions_hint">Tap \"Allow everything\", then accept each Android prompt.</string>
+    <string name="setup_allow_all">Allow everything</string>
+    <string name="perm_mic">Microphone</string>
+    <string name="perm_mic_desc">Needed to talk in Teams calls and meetings.</string>
+    <string name="perm_camera">Camera</string>
+    <string name="perm_camera_desc">Optional. For video in calls.</string>
+    <string name="perm_notifications">Notifications</string>
+    <string name="perm_notifications_desc">For new messages, mail and incoming calls.</string>
+    <string name="perm_bluetooth">Nearby devices (Bluetooth)</string>
+    <string name="perm_bluetooth_desc">Lets calls use your Bluetooth earphones or car.</string>
+    <string name="perm_battery">Run in background</string>
+    <string name="perm_battery_desc">Stops Android from putting WorkDeck to sleep, so notifications and calls arrive on time.</string>
+    <string name="perm_fullscreen">Incoming-call screen</string>
+    <string name="perm_fullscreen_desc">Shows incoming calls on the lock screen, like a phone call.</string>
+    <string name="perm_oem">Phone-maker battery settings</string>
+    <string name="perm_oem_desc">%1$s phones can close apps aggressively. Open app settings and allow Autostart / \"No restrictions\" for battery, and lock WorkDeck in Recents.</string>
+    <string name="perm_oem_desc_generic">If notifications stop after a while, open app settings and set battery usage to \"Unrestricted\".</string>
+    <string name="status_allowed">Allowed ✓</string>
+    <string name="status_needed">Not allowed</string>
+    <string name="status_optional">Optional</string>
+    <string name="btn_allow">Allow</string>
+    <string name="btn_open">Open</string>
+    <string name="setup_tips_title">Good to know</string>
+    <string name="setup_tips">• When Microsoft asks \"Stay signed in?\", tap Yes. You will then stay signed in, even after closing the app or restarting the phone.\n• To answer a call, tap the notification (or Answer) — Teams opens with the call.\n• Use the speaker button in the bottom bar during a call to switch between speaker, earpiece and Bluetooth.\n• Pinch to zoom, or use the zoom button. Switch desktop / mobile view with the screen button.\n• Outlook: to get mail notifications, open Outlook Settings → General → Notifications and turn on desktop notifications.</string>
+    <string name="setup_continue">Start WorkDeck</string>
+    <string name="setup_need_one_app">Choose at least one: Teams or Outlook.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="sec_account">Account &amp; apps</string>
+    <string name="set_account_type">Account type</string>
+    <string name="set_enable_teams">Use Teams</string>
+    <string name="set_enable_outlook">Use Outlook</string>
+    <string name="set_custom_urls">Custom start pages</string>
+    <string name="set_custom_urls_desc">For special Microsoft clouds (e.g. GCC). Leave empty for normal accounts.</string>
+    <string name="set_custom_url_hint">https://… (empty = default)</string>
+    <string name="sec_view">View</string>
+    <string name="set_view_teams">Teams view</string>
+    <string name="set_view_outlook">Outlook view</string>
+    <string name="set_desktop_width">Desktop page width</string>
+    <string name="set_desktop_width_desc">Smaller width = bigger text in desktop view</string>
+    <string name="sec_background">Background &amp; notifications</string>
+    <string name="set_keep_alive">Keep running in background</string>
+    <string name="set_keep_alive_desc">Stay connected after closing or swiping away the app (needed for notifications and calls)</string>
+    <string name="set_wakelock">Reliable mode</string>
+    <string name="set_wakelock_desc">Keeps the phone\'s processor awake for instant notifications. Uses more battery.</string>
+    <string name="set_boot">Start after phone restarts</string>
+    <string name="set_auto_refresh">Refresh idle pages every 12 hours</string>
+    <string name="set_auto_refresh_desc">Keeps long-running Teams/Outlook pages fast (only when not in use or in a call)</string>
+    <string name="set_notify_teams">Teams notifications</string>
+    <string name="set_notify_outlook">Outlook notifications</string>
+    <string name="set_channels">Notification sounds &amp; style</string>
+    <string name="set_channels_desc">Open Android notification settings for WorkDeck</string>
+    <string name="sec_calls">Calls</string>
+    <string name="set_call_alerts">Incoming-call alerts</string>
+    <string name="set_call_alerts_desc">Ring and show a full-screen alert for incoming Teams calls</string>
+    <string name="set_call_ringtone">Keep ringing until answered</string>
+    <string name="set_default_route">Default call audio</string>
+    <string name="set_default_route_desc">Bluetooth or wired headsets are used automatically when connected</string>
+    <string name="set_pip">Picture-in-picture during calls</string>
+    <string name="set_pip_desc">Keep the call visible in a small window when you leave the app</string>
+    <string name="sec_data">Data</string>
+    <string name="set_sign_out">Sign out &amp; clear all data</string>
+    <string name="set_sign_out_desc">Removes your Microsoft sign-in, cookies and cached pages</string>
+    <string name="set_sign_out_confirm">Sign out of Teams and Outlook and delete all WorkDeck web data?</string>
+    <string name="set_signed_out">Signed out. Data cleared.</string>
+    <string name="sec_advanced">Advanced</string>
+    <string name="set_sw_shim">Service-worker notification helper</string>
+    <string name="set_sw_shim_desc">Lets notifications sent from background workers appear. Turn off only if a page misbehaves.</string>
+    <string name="set_debug">Web debugging (chrome://inspect)</string>
+    <string name="set_debug_desc">For troubleshooting with a computer. Takes effect after restarting the app.</string>
+    <string name="sec_about">About</string>
+    <string name="set_version">Version %1$s · WebView %2$s</string>
+    <string name="set_about_desc">WorkDeck is an independent app. It is not made by or affiliated with Microsoft. Teams and Outlook are trademarks of Microsoft Corporation.</string>
+    <string name="restart_needed">Restart WorkDeck (Menu → Quit, then reopen) to apply.</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+    <string name="save">Save</string>
+</resources>

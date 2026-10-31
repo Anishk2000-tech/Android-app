@@ -1,0 +1,432 @@
+/*
+ * Tests for app/src/main/assets/workdeck/inject.js and sw-shim.js in real Chromium
+ * (the engine inside Android System WebView), with a mocked native bridge.
+ *
+ * Run:  node tests/js/inject.test.js        (needs the `playwright` package + Chromium)
+ */
+'use strict';
+const fs = require('fs');
+const http = require('http');
+const path = require('path');
+const assert = require('assert');
+const { chromium } = require('playwright');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const INJECT = fs.readFileSync(path.join(ROOT, 'app/src/main/assets/workdeck/inject.js'), 'utf8');
+const SHIM = fs.readFileSync(path.join(ROOT, 'app/src/main/assets/workdeck/sw-shim.js'), 'utf8');
+const TOKEN = 'test-token-0123456789abcdef';
+
+function script(cfg) {
+  const full = Object.assign({
+    token: TOKEN, site: 'teams', desktop: true, desktopLayout: true, desktopWidth: 1024,
+    notifications: true, fullVersion: '130.0.6723.102', androidVersion: '14', model: 'Pixel 7', debug: false,
+    brands: [['Google Chrome', '130', '130.0.6723.102'], ['Chromium', '130', '130.0.6723.102'], ['Not?A_Brand', '99', '99.0.0.0']],
+  }, cfg || {});
+  return INJECT.split('__WORKDECK_CONFIG__').join(JSON.stringify(full));
+}
+
+// Mock of the Java object WebView exposes as window.WorkDeckBridge.
+const BRIDGE_MOCK = `
+  window.__calls = [];
+  window.__perm = 'granted';
+  window.__files = {};
+  window.WorkDeckBridge = {
+    _rec(name, args) { window.__calls.push({ name: name, args: Array.prototype.slice.call(args) }); },
+    permission(t) { this._rec('permission', arguments); return t === '${TOKEN}' ? window.__perm : 'denied'; },
+    requestPermission(t) { this._rec('requestPermission', arguments); },
+    notify(t, json) { this._rec('notify', arguments); },
+    closeNotification(t, id) { this._rec('closeNotification', arguments); },
+    badge(t, n) { this._rec('badge', arguments); },
+    fileStart(t, name, mime, size) { this._rec('fileStart', arguments); window.__files.f1 = { name: name, mime: mime, chunks: [] }; return 'f1'; },
+    fileChunk(t, id, b64) { window.__files[id].chunks.push(b64); },
+    fileEnd(t, id, status) { this._rec('fileEnd', arguments); },
+    mediaDelta(t, d) { this._rec('mediaDelta', arguments); },
+    callSignal(t, type, detail) { this._rec('callSignal', arguments); },
+    log(t, m) { this._rec('log', arguments); },
+  };
+`;
+
+const PAGES = {
+  '/mobile.html': `<!doctype html><html><head>
+      <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+      <title>(3) Chat | Test</title></head><body><h1>test</h1>
+      <div role="dialog"><button aria-label="Decline call">x</button><button aria-label="Accept call with audio">ok</button></div>
+      </body></html>`,
+  '/noviewport.html': `<!doctype html><html><head><title>t</title></head><body>no viewport</body></html>`,
+  '/late.html': `<!doctype html><html><head><title>t</title></head><body><script>
+      var m = document.createElement('meta'); m.name = 'viewport'; m.content = 'width=device-width, user-scalable=0';
+      document.head.appendChild(m);</script></body></html>`,
+  '/sw.html': `<!doctype html><html><head><title>sw</title></head><body>sw page</body></html>`,
+  '/sw.js': `${SHIM}\nself.addEventListener('install', e => self.skipWaiting());
+      self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+      self.addEventListener('message', e => { if (e.data === 'notify') self.registration.showNotification('From SW', { body: 'sw body', tag: 'swtag', icon: '/i.png' }); });`,
+};
+
+function startServer() {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      const body = PAGES[req.url.split('?')[0]];
+      if (!body) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { 'Content-Type': req.url.endsWith('.js') ? 'application/javascript' : 'text/html' });
+      res.end(body);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+}
+
+async function newPage(browser, base, cfg, file) {
+  const ctx = await browser.newContext({ viewport: { width: 412, height: 860 } });
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script(cfg));
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.goto(base + (file || '/mobile.html'));
+  return { ctx, page, errors };
+}
+
+const tests = [];
+function test(name, fn) { tests.push({ name, fn }); }
+
+test('desktop identity: platform, userAgentData, window.chrome', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => ({
+    platform: navigator.platform,
+    mobile: navigator.userAgentData.mobile,
+    uaPlatform: navigator.userAgentData.platform,
+    brands: navigator.userAgentData.brands.map((x) => x.brand),
+    high: await navigator.userAgentData.getHighEntropyValues(['platformVersion', 'architecture', 'bitness', 'fullVersionList']),
+    json: JSON.stringify(navigator.userAgentData),
+    chrome: typeof window.chrome === 'object' && typeof window.chrome.loadTimes === 'function',
+  }));
+  assert.strictEqual(r.platform, 'Win32');
+  assert.strictEqual(r.mobile, false);
+  assert.strictEqual(r.uaPlatform, 'Windows');
+  assert.deepStrictEqual(r.brands, ['Google Chrome', 'Chromium', 'Not?A_Brand']);
+  assert.strictEqual(r.high.platformVersion, '15.0.0');
+  assert.strictEqual(r.high.architecture, 'x86');
+  assert.strictEqual(r.high.bitness, '64');
+  assert.strictEqual(r.high.fullVersionList[0].version, '130.0.6723.102');
+  assert.ok(r.json.includes('"platform":"Windows"'));
+  assert.ok(r.chrome);
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('mobile identity (Outlook mobile view): Chrome for Android, no Win32', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, { site: 'outlook', desktop: false, desktopLayout: false });
+  const r = await page.evaluate(() => ({ p: navigator.platform, m: navigator.userAgentData.mobile, up: navigator.userAgentData.platform }));
+  assert.notStrictEqual(r.p, 'Win32');
+  assert.strictEqual(r.m, true);
+  assert.strictEqual(r.up, 'Android');
+  await ctx.close();
+});
+
+test('desktop layout rewrites the viewport meta to the desktop width', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, { desktopWidth: 1280 });
+  const r = await page.evaluate(() => ({ c: document.querySelector('meta[name=viewport]').content, w: window.innerWidth }));
+  assert.strictEqual(r.c, 'width=1280, user-scalable=yes');
+  await ctx.close();
+});
+
+test('desktop layout adds a viewport meta when the page has none', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {}, '/noviewport.html');
+  const c = await page.evaluate(() => document.querySelector('meta[name=viewport]').content);
+  assert.strictEqual(c, 'width=1024, user-scalable=yes');
+  await ctx.close();
+});
+
+test('mobile view keeps the layout but re-enables pinch zoom (incl. late-inserted meta)', async (b, base) => {
+  for (const file of ['/mobile.html', '/late.html']) {
+    const { ctx, page } = await newPage(b, base, { desktopLayout: false }, file);
+    await page.waitForTimeout(50);
+    const c = await page.evaluate(() => document.querySelector('meta[name=viewport]').content);
+    assert.ok(/width=device-width/.test(c), c);
+    assert.ok(/user-scalable=yes/.test(c), c);
+    assert.ok(!/maximum-scale=1\b/.test(c), c);
+    await ctx.close();
+  }
+});
+
+test('Notification API: permission, constructor, show event, payload to bridge', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const out = { perm: Notification.permission, name: Notification.name, max: Notification.maxActions };
+    out.req = await Notification.requestPermission();
+    const n = new Notification('Alice', { body: 'Hello there', tag: 'chat-1', icon: '/avatar.png', requireInteraction: false });
+    out.isEventTarget = n instanceof EventTarget;
+    out.title = n.title; out.body = n.body;
+    await new Promise((res) => { n.onshow = () => res(); });
+    out.calls = window.__calls.filter((c) => c.name === 'notify').map((c) => ({ token: c.args[0], p: JSON.parse(c.args[1]) }));
+    return out;
+  });
+  assert.strictEqual(r.perm, 'granted');
+  assert.strictEqual(r.name, 'Notification');
+  assert.strictEqual(r.req, 'granted');
+  assert.ok(r.isEventTarget);
+  assert.strictEqual(r.calls.length, 1);
+  assert.strictEqual(r.calls[0].token, 'test-token-0123456789abcdef');
+  const p = r.calls[0].p;
+  assert.strictEqual(p.title, 'Alice');
+  assert.strictEqual(p.body, 'Hello there');
+  assert.strictEqual(p.tag, 'chat-1');
+  assert.ok(p.icon.endsWith('/avatar.png') && p.icon.startsWith('http://127.0.0.1'), p.icon);
+  assert.ok(p.id && p.id.length > 3);
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('Notification click from Android reaches onclick + click listeners; close() informs native', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const n = new Notification('Bob', { body: 'Ping' });
+    await new Promise((res) => setTimeout(res, 20));
+    const id = JSON.parse(window.__calls.find((c) => c.name === 'notify').args[1]).id;
+    let onclick = 0, listener = 0;
+    n.onclick = () => onclick++;
+    n.addEventListener('click', () => listener++);
+    const handled = window.__wdNotificationClicked(id);
+    const unknown = window.__wdNotificationClicked('nope');
+    n.close();
+    const closed = window.__calls.filter((c) => c.name === 'closeNotification').map((c) => c.args[1]);
+    return { handled, unknown, onclick, listener, closed, id };
+  });
+  assert.strictEqual(r.handled, true);
+  assert.strictEqual(r.unknown, false);
+  assert.strictEqual(r.onclick, 1);
+  assert.strictEqual(r.listener, 1);
+  assert.deepStrictEqual(r.closed, [r.id]);
+  await ctx.close();
+});
+
+test('denied permission: no native notification, error event fires', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    window.__perm = 'denied';
+    const n = new Notification('x');
+    const ev = await new Promise((res) => { n.onerror = () => res('error'); setTimeout(() => res('timeout'), 500); });
+    return { ev, perm: Notification.permission, notifies: window.__calls.filter((c) => c.name === 'notify').length };
+  });
+  assert.strictEqual(r.ev, 'error');
+  assert.strictEqual(r.perm, 'denied');
+  assert.strictEqual(r.notifies, 0);
+  await ctx.close();
+});
+
+test('requestPermission while "default" asks native and resolves after the grant', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    window.__perm = 'default';
+    const pr = Notification.requestPermission();
+    const asked = window.__calls.some((c) => c.name === 'requestPermission');
+    setTimeout(() => { window.__perm = 'granted'; window.__wdPermissionResult(); }, 50);
+    return { asked, result: await pr };
+  });
+  assert.strictEqual(r.asked, true);
+  assert.strictEqual(r.result, 'granted');
+  await ctx.close();
+});
+
+test('permissions.query("notifications") reflects native state; other queries untouched', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const a = await navigator.permissions.query({ name: 'notifications' });
+    window.__perm = 'default';
+    const c = await navigator.permissions.query({ name: 'notifications' });
+    let geoOk = true;
+    try { await navigator.permissions.query({ name: 'geolocation' }); } catch (e) { geoOk = false; }
+    return { a: a.state, c: c.state, geoOk };
+  });
+  assert.strictEqual(r.a, 'granted');
+  assert.strictEqual(r.c, 'prompt');
+  assert.strictEqual(r.geoOk, true);
+  await ctx.close();
+});
+
+test('ServiceWorkerRegistration.showNotification (page side) is forwarded', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const res = ServiceWorkerRegistration.prototype.showNotification.call({}, 'Meeting', { body: 'starts now', tag: 'm1' });
+    await res;
+    await new Promise((r2) => setTimeout(r2, 20));
+    const list = await ServiceWorkerRegistration.prototype.getNotifications.call({}, { tag: 'm1' });
+    return { calls: window.__calls.filter((c) => c.name === 'notify').map((c) => JSON.parse(c.args[1])), n: list.length };
+  });
+  assert.strictEqual(r.calls.length, 1);
+  assert.strictEqual(r.calls[0].title, 'Meeting');
+  assert.strictEqual(r.calls[0].sw, true);
+  assert.strictEqual(r.n, 1);
+  await ctx.close();
+});
+
+test('service-worker shim: SW showNotification -> page -> native bridge', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {}, '/sw.html');
+  const r = await page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((res) => navigator.serviceWorker.addEventListener('controllerchange', res, { once: true }));
+    }
+    navigator.serviceWorker.controller.postMessage('notify');
+    for (let i = 0; i < 50; i++) {
+      const n = window.__calls.filter((c) => c.name === 'notify');
+      if (n.length) return JSON.parse(n[0].args[1]);
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    return null;
+  });
+  assert.ok(r, 'no notification forwarded from the service worker');
+  assert.strictEqual(r.title, 'From SW');
+  assert.strictEqual(r.body, 'sw body');
+  assert.strictEqual(r.tag, 'swtag');
+  assert.ok(r.icon.endsWith('/i.png'));
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('Badging API reports unread counts to native (top frame)', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    await navigator.setAppBadge(7);
+    await navigator.clearAppBadge();
+    await navigator.setAppBadge();
+    return window.__calls.filter((c) => c.name === 'badge').map((c) => c.args[1]);
+  });
+  assert.deepStrictEqual(r, ['7', '0', '-1']);
+  await ctx.close();
+});
+
+test('getUserMedia mic tracks are counted up and down (call detection)', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const after = window.__calls.filter((c) => c.name === 'mediaDelta').map((c) => c.args[1]);
+    const clone = s.getAudioTracks()[0].clone();
+    s.getTracks().forEach((t) => t.stop());
+    clone.stop();
+    clone.stop();
+    const all = window.__calls.filter((c) => c.name === 'mediaDelta').map((c) => c.args[1]);
+    return { after, all };
+  });
+  assert.deepStrictEqual(r.after, ['1']);
+  assert.deepStrictEqual(r.all, ['1', '1', '-1', '-1']);
+  await ctx.close();
+});
+
+test('blob download is streamed to native in base64 chunks with the right name', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const bytes = new Uint8Array(2 * 1024 * 1024 + 123);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31) & 0xff;
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'report.pdf';
+    document.body.appendChild(a);
+    a.addEventListener('click', (e) => e.preventDefault());
+    a.click();
+    URL.revokeObjectURL(url); // pages do this immediately; WorkDeck must still read it
+    window.__wdDownload(url, 'application/pdf');
+    for (let i = 0; i < 100; i++) {
+      if (window.__calls.some((c) => c.name === 'fileEnd')) break;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    const f = window.__files.f1;
+    const bin = f.chunks.map((c) => atob(c)).join('');
+    let same = bin.length === bytes.length;
+    for (let i = 0; same && i < bytes.length; i += 997) same = bin.charCodeAt(i) === bytes[i];
+    const end = window.__calls.find((c) => c.name === 'fileEnd');
+    return { name: f.name, mime: f.mime, chunks: f.chunks.length, same, status: end && end.args[2] };
+  });
+  assert.strictEqual(r.name, 'report.pdf');
+  assert.strictEqual(r.mime, 'application/pdf');
+  assert.ok(r.chunks >= 3, 'expected chunking, got ' + r.chunks);
+  assert.strictEqual(r.same, true);
+  assert.strictEqual(r.status, 'ok');
+  await ctx.close();
+});
+
+test('call actions click the right buttons (accept audio / decline)', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const clicked = [];
+    document.querySelectorAll('button').forEach((btn) => btn.addEventListener('click', () => clicked.push(btn.getAttribute('aria-label'))));
+    const a = await window.__wdCallAction('accept');
+    const d = await window.__wdCallAction('decline');
+    return { a, d, clicked };
+  });
+  assert.strictEqual(r.a, true);
+  assert.strictEqual(r.d, true);
+  assert.deepStrictEqual(r.clicked, ['Accept call with audio', 'Decline call']);
+  await ctx.close();
+});
+
+test('ringtone heuristic fires for looping ring sounds only', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const a1 = new Audio('/media/ringtone_call.mp3'); a1.loop = true; a1.play().catch(() => {});
+    const a2 = new Audio('/media/notification.mp3'); a2.loop = false; a2.play().catch(() => {});
+    const a3 = new Audio('/media/music.mp3'); a3.loop = true; a3.play().catch(() => {});
+    return window.__calls.filter((c) => c.name === 'callSignal').map((c) => c.args[1] + ':' + c.args[2].split('/').pop());
+  });
+  assert.deepStrictEqual(r, ['ringing:ringtone_call.mp3']);
+  await ctx.close();
+});
+
+test('script is idempotent and does not leak the token into page globals', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {});
+  await page.evaluate(script({}));
+  const r = await page.evaluate(() => {
+    const leaks = Object.getOwnPropertyNames(window).filter((k) => {
+      try { return typeof window[k] === 'string' && window[k].indexOf('test-token') >= 0; } catch (e) { return false; }
+    });
+    const n = new Notification('once');
+    return new Promise((res) => setTimeout(() => res({ leaks, notifies: window.__calls.filter((c) => c.name === 'notify').length }), 50));
+  });
+  assert.deepStrictEqual(r.leaks, []);
+  assert.strictEqual(r.notifies, 1, 'double injection must not double-post');
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('works without the native bridge (e.g. a non-Microsoft frame): no exceptions', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.goto(base + '/mobile.html');
+  const r = await page.evaluate(async () => {
+    const p = Notification.permission;
+    const n = new Notification('x');
+    await navigator.setAppBadge(1);
+    return p;
+  });
+  assert.strictEqual(r, 'default');
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+(async () => {
+  const srv = await startServer();
+  const base = 'http://127.0.0.1:' + srv.address().port;
+  const browser = await chromium.launch({
+    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+  });
+  let failed = 0;
+  for (const t of tests) {
+    try {
+      await Promise.race([
+        t.fn(browser, base),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('test timed out after 20s')), 20000)),
+      ]);
+      console.log('PASS  ' + t.name);
+    } catch (e) {
+      failed++;
+      console.log('FAIL  ' + t.name + '\n      ' + String(e && e.stack || e).split('\n').slice(0, 4).join('\n      '));
+    }
+  }
+  await browser.close();
+  srv.close();
+  console.log(`\n${tests.length - failed}/${tests.length} passed`);
+  process.exit(failed ? 1 : 0);
+})();

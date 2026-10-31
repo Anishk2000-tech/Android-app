@@ -1,0 +1,59 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing: put your key details in keystore.properties (never commit it),
+// or set the WORKDECK_KEYSTORE / WORKDECK_KS_PASS / WORKDECK_KEY_ALIAS environment
+// variables (used by GitHub Actions). Without them, release builds use the debug key.
+def ksProps = new Properties()
+def ksFile = rootProject.file('keystore.properties')
+if (ksFile.exists()) ksFile.withInputStream { ksProps.load(it) }
+def ksPath = ksProps.getProperty('storeFile') ?: System.getenv('WORKDECK_KEYSTORE')
+def ksPass = ksProps.getProperty('storePassword') ?: System.getenv('WORKDECK_KS_PASS')
+def ksAlias = ksProps.getProperty('keyAlias') ?: (System.getenv('WORKDECK_KEY_ALIAS') ?: 'workdeck')
+
+android {
+    namespace 'com.workdeck.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.workdeck.app"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    signingConfigs {
+        release {
+            if (ksPath && ksPass) {
+                storeFile file(ksPath)
+                storePassword ksPass
+                keyAlias ksAlias
+                keyPassword ksPass
+                storeType 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig = (ksPath && ksPass) ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    buildFeatures {
+        buildConfig false
+    }
+}

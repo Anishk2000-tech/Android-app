@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wd_primary">#0F766E</color>
+    <color name="wd_on_primary">#FFFFFF</color>
+    <color name="wd_bg">#FFFFFF</color>
+    <color name="wd_bar">#F1F5F4</color>
+    <color name="wd_card">#F7FAF9</color>
+    <color name="wd_divider">#DDE3E2</color>
+    <color name="wd_icon">#4B5563</color>
+    <color name="wd_text">#111827</color>
+    <color name="wd_text2">#4B5563</color>
+    <color name="wd_badge">#DC2626</color>
+    <color name="wd_ok">#15803D</color>
+    <color name="wd_warn">#B45309</color>
+    <color name="launcher_bg">#0F766E</color>
+</resources>

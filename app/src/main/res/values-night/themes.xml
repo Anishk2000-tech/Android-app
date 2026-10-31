@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.WorkDeck" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/wd_primary</item>
+        <item name="android:colorPrimaryDark">@color/wd_bg</item>
+        <item name="android:colorAccent">@color/wd_primary</item>
+        <item name="android:colorBackground">@color/wd_bg</item>
+        <item name="android:windowBackground">@color/wd_bg</item>
+        <item name="android:statusBarColor">@color/wd_bg</item>
+        <item name="android:navigationBarColor">@color/wd_bar</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">@color/wd_text</item>
+        <item name="android:textColorSecondary">@color/wd_text2</item>
+    </style>
+    <style name="Theme.WorkDeck.Page" parent="Theme.WorkDeck" />
+</resources>
