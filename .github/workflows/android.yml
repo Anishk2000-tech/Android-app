@@ -55,9 +55,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: android14-swiftshader
-            api: 34
-            gpu: swiftshader_indirect
           - name: android14-swangle
             api: 34
             gpu: swangle_indirect
@@ -99,6 +96,18 @@ jobs:
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu ${{ matrix.gpu }} -no-boot-anim -no-snapshot-save -camera-back emulated -camera-front emulated
           script: bash scripts/ci/emulator-test.sh "$(ls apks/debug/*.apk | head -1)" "$(ls release/*.apk 2>/dev/null | head -1)"
+
+      - name: Screenshots (thumbnails, decode with base64)
+        if: always()
+        run: cat ci-out/*.thumb 2>/dev/null || true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "----- WorkDeck log lines -----"
+          cat ci-out/workdeck-log.txt 2>/dev/null || true
+          echo "----- RESULTS (${{ matrix.name }}) -----"
+          cat ci-out/summary.txt 2>/dev/null || echo "no summary"
 
       - uses: actions/upload-artifact@v4
         if: always()

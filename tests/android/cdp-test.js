@@ -17,12 +17,14 @@ let failures = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sh = (c) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }); } catch (e) { return String(e.stdout || '') + String(e.stderr || ''); } };
 function check(ok, what, detail) {
-  console.log((ok ? 'PASS  ' : 'FAIL  ') + what + (detail !== undefined ? '  -> ' + JSON.stringify(detail) : ''));
+  const line = (ok ? 'PASS  ' : 'FAIL  ') + what + (detail !== undefined ? '  -> ' + JSON.stringify(detail).slice(0, 300) : '');
+  console.log(line);
+  try { fs.appendFileSync(path.join(OUT, 'summary.txt'), line + '\n'); } catch (e) {}
   if (!ok) failures++;
 }
 const notifications = () => sh('adb shell dumpsys notification --noredact');
 const ui = (args) => sh('python3 scripts/ci/ui.py ' + args);
-const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '.png')}`);
+const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '.png')} && python3 scripts/ci/thumb.py ${path.join(OUT, name + '.png')} ${name} > ${path.join(OUT, name + '.thumb')}`);
 
 async function connect(wsUrl) {
   const ws = new WebSocket(wsUrl);

@@ -59,7 +59,9 @@ public final class WebViewSupport {
             sFactory = cast(WebViewProviderFactoryBoundaryInterface.class, handler);
             String[] features = sFactory.getSupportedFeatures();
             sFeatures = new HashSet<>(Arrays.asList(features == null ? new String[0] : features));
-            Log.i(TAG, "WebView support features: " + sFeatures.size());
+            Log.i(TAG, "WebView support features: " + sFeatures.size() + ", documentStartScript="
+                    + sFeatures.contains(FEATURE_DOCUMENT_START_SCRIPT) + ", uaMetadata="
+                    + sFeatures.contains(FEATURE_USER_AGENT_METADATA));
         } catch (Throwable t) {
             Log.w(TAG, "WebView support library glue unavailable", t);
             sFactory = null;

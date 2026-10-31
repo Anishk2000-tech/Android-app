@@ -9,14 +9,18 @@ OUT=ci-out
 mkdir -p "$OUT"
 fail=0
 step() { echo; echo "=================== $*"; alive; }
-check() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; }
-shot() { timeout 30 adb exec-out screencap -p > "$OUT/$1.png" && python3 scripts/ci/thumb.py "$OUT/$1.png" "$1" || true; }
+check() {
+  if eval "$2" >/dev/null 2>&1; then echo "PASS  $1" | tee -a "$OUT/summary.txt"; else echo "FAIL  $1" | tee -a "$OUT/summary.txt"; fail=1; fi
+}
+# Screenshots: full PNG kept as artifact, small thumbnail printed later by a separate CI step.
+shot() { timeout 30 adb exec-out screencap -p > "$OUT/$1.png" && python3 scripts/ci/thumb.py "$OUT/$1.png" "$1" > "$OUT/$1.thumb" || true; }
 # If the emulator itself dies, report what we have and stop (instead of waiting forever).
 alive() {
   if ! timeout 15 adb get-state >/dev/null 2>&1; then
     echo "!!! EMULATOR IS GONE (the emulator process died, not the app) - last logcat lines:"
     grep -E "WorkDeck/|FATAL|AndroidRuntime|lowmemorykiller|chromium" "$OUT/logcat-stream.txt" 2>/dev/null | tail -60
     tail -30 "$OUT/logcat-stream.txt" 2>/dev/null
+    echo "ABORTED: emulator process died" >> "$OUT/summary.txt"
     echo "EMULATOR TEST: ABORTED (emulator crashed)"
     exit 3
   fi
@@ -105,4 +109,5 @@ fi
 
 echo
 [ "$fail" = 0 ] && echo "EMULATOR TEST: ALL PASSED" || echo "EMULATOR TEST: SOME CHECKS FAILED"
+grep -hE "WorkDeck/" "$OUT"/logcat-*.txt 2>/dev/null | grep -vE "thumb" | sort -u | tail -40 > "$OUT/workdeck-log.txt"
 exit "$fail"
