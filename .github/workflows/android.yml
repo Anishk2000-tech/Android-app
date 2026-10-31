@@ -36,9 +36,11 @@ jobs:
           SDK_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
           LAMBDA="$(ls $ANDROID_HOME/build-tools/*/core-lambda-stubs.jar | tail -1)"
           CLASSES=app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes
+          RJAR="$(find app/build/intermediates -path '*debug*' -name R.jar | head -1)"
+          echo "R.jar: $RJAR"
           mkdir -p build/tests
-          javac -nowarn -source 8 -target 8 -bootclasspath "$LAMBDA:$SDK_JAR" -cp "$CLASSES" -d build/tests tests/jvm/LogicTest.java
-          java -cp "build/tests:$CLASSES" LogicTest
+          javac -nowarn -source 8 -target 8 -bootclasspath "$LAMBDA:$SDK_JAR" -cp "$CLASSES:$RJAR" -d build/tests tests/jvm/LogicTest.java
+          java -cp "build/tests:$CLASSES:$RJAR" LogicTest
 
       - uses: actions/upload-artifact@v4
         with:
