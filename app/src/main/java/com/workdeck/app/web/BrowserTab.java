@@ -380,7 +380,14 @@ public final class BrowserTab {
 
     /** Zoom all the way out, i.e. fit the page width to the screen. */
     public void zoomFit() {
-        if (mWebView != null) mWebView.zoomBy(0.01f);
+        if (mWebView == null) return;
+        try {
+            // zoomBy() clamps to the minimum (fit-width) scale. Android rejects factors <= 0.01
+            // despite its documentation, so use 0.02 (enough to reach the minimum from 5x).
+            mWebView.zoomBy(0.02f);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "zoomFit failed", e);
+        }
     }
 
     public int textZoom() {

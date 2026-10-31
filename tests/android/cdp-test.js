@@ -123,7 +123,12 @@ async function pageFor(pred) {
   shot('03-call-alert');
   await teams.eval(`window.__ciCall.close(), 'ok'`);
   await waitFor(() => !wdNotifs().some((r) => r.includes('CI Caller')), 8000);
-  check(!wdNotifs().some((r) => r.includes('CI Caller')), 'call alert disappears when the page closes it');
+  const lingering = wdNotifs().filter((r) => r.includes('CI Caller'));
+  check(lingering.length === 0, 'call alert disappears when the page closes it');
+  if (lingering.length) {
+    console.log('  lingering record: ' + lingering[0].slice(0, 500).replace(/\n/g, ' '));
+    console.log('  logcat: ' + sh('adb logcat -d -s WorkDeck/Notifier WorkDeck/Main').split('\n').slice(-12).join('\n  '));
+  }
 
   // 4. Microphone through WebRTC getUserMedia + call detection + background survival
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);

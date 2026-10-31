@@ -161,6 +161,7 @@ public final class Notifier {
 
     public void closeWebNotification(Site site, String jsId) {
         String k = site.key + "|" + jsId;
+        Log.i(TAG, site.key + ": page closed notification " + jsId + (k.equals(mCallAlertKey) ? " (call alert)" : ""));
         if (k.equals(mCallAlertKey)) {
             cancelCallAlert();
         }
@@ -221,6 +222,7 @@ public final class Notifier {
 
     public void showCallAlert(Site site, String jsId, String title, String body) {
         mCallAlertKey = site.key + "|" + jsId;
+        Log.i(TAG, "call alert shown for " + mCallAlertKey);
         mLastRingAlert = SystemClock.elapsedRealtime();
         Intent full = new Intent(mApp, MainActivity.class)
                 .setAction(MainActivity.ACTION_INCOMING_CALL)
@@ -266,6 +268,7 @@ public final class Notifier {
     }
 
     public void cancelCallAlert() {
+        if (mCallAlertKey != null) Log.i(TAG, "call alert cancelled");
         mNm.cancel(ID_CALL_ALERT);
         mCallAlertKey = null;
     }

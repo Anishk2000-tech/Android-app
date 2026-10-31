@@ -84,7 +84,7 @@ Account type, enable Teams/Outlook, custom start pages (special Microsoft clouds
 | Outlook mail notifications missing | Turn on desktop notifications in Outlook settings (section 3). |
 | Call: others can't hear me | Setup must show *Microphone: Allowed ✓*. In the Teams call, open **More → Settings → Device settings** and pick the default microphone. |
 | No sound / wrong speaker | Tap the speaker button in the bottom bar during the call. |
-| "Browser not supported" or blank page | Update **Android System WebView** and **Chrome** in the Play Store, then ⋮ → Reload. |
+| "Your browser version isn't supported" / blank page | WorkDeck shows a prompt with **Update WebView / Update Chrome** buttons when Microsoft reports this. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Reload. (Teams only supports the latest few Chrome versions.) |
 | Sign-in loops / wrong account | ⋮ → Settings → **Sign out & clear all data**, then sign in again. |
 | Company says device not allowed | Your organisation's policy (e.g. Intune / Conditional Access) may only allow approved apps. WorkDeck can't bypass that. |
 | Text too small in desktop view | Zoom button → choose a smaller **Width** (e.g. 800px) or use **A+**. Or switch to mobile view. |

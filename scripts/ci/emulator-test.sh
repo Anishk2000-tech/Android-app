@@ -95,7 +95,7 @@ grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-debug.txt" | tail -60
 crash_of_ours() { grep -A3 "FATAL EXCEPTION" "$1" | grep -q "Process: $PKG"; }
 check "no WorkDeck crash in debug run" "! crash_of_ours $OUT/logcat-debug.txt"
 grep -A3 "FATAL EXCEPTION" "$OUT/logcat-debug.txt" | grep "Process:" | sort | uniq -c | sed 's/^/  crashed process: /' | tee -a "$OUT/summary.txt"
-grep -A30 "Process: $PKG" "$OUT/logcat-debug.txt" | head -40 | tee -a "$OUT/summary.txt"
+grep -A30 "Process: $PKG" "$OUT/logcat-debug.txt" | grep "AndroidRuntime" | head -25 | tee -a "$OUT/summary.txt"
 
 if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
   step "Smoke-test the delivered release APK ($RELEASE_APK)"
@@ -107,7 +107,7 @@ if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
   timeout 60 adb logcat -d > "$OUT/logcat-release.txt"
   grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-release.txt" | tail -30
   check "no WorkDeck crash in release run" "! crash_of_ours $OUT/logcat-release.txt"
-  grep -A30 "Process: $PKG" "$OUT/logcat-release.txt" | head -40 | tee -a "$OUT/summary.txt"
+  grep -A30 "Process: $PKG" "$OUT/logcat-release.txt" | grep "AndroidRuntime" | head -25 | tee -a "$OUT/summary.txt"
 fi
 
 echo
