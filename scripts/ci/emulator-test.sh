@@ -37,7 +37,13 @@ run_setup_flow() {
   echo "waiting for Teams / Outlook to load..."
   for i in 1 2 3 4; do sleep 10; alive; echo "  t+${i}0s mem: $(mem)"; done
   shot "$1-main"; texts "$1-main"
-  check "[$1] main screen shows Teams and Outlook tabs" "grep -q 'Show Teams' $OUT/$1-main.txt && grep -q 'Show Outlook' $OUT/$1-main.txt"
+  check "[$1] bottom bar shows the CRAFTWW, OMC and ACXIOM accounts + Add" "grep -qx 'CRAFTWW' $OUT/$1-main.txt && grep -qx 'OMC' $OUT/$1-main.txt && grep -qx 'ACXIOM' $OUT/$1-main.txt && grep -q 'Add account' $OUT/$1-main.txt"
+  python3 scripts/ci/ui.py tap "=CRAFTWW" > /dev/null
+  sleep 2
+  shot "$1-dropup"; texts "$1-dropup"
+  check "[$1] CRAFTWW drop-up lists its Teams and Outlook" "grep -q '^Teams' $OUT/$1-dropup.txt && grep -q '^Outlook' $OUT/$1-dropup.txt && grep -q 'CRAFTWW settings' $OUT/$1-dropup.txt"
+  adb shell input keyevent KEYCODE_BACK
+  sleep 1
   adb shell dumpsys activity services "$PKG" > "$OUT/$1-services.txt"
   grep -E "ServiceRecord|isForeground|foregroundServiceType|types=" "$OUT/$1-services.txt" | head -8
   check "[$1] keep-alive foreground service is running" "grep -q 'isForeground=true' $OUT/$1-services.txt"
@@ -54,7 +60,7 @@ adb shell dumpsys deviceidle whitelist +"$PKG"
 run_setup_flow debug
 
 step "WebView feature checks over DevTools protocol"
-timeout 420 node tests/android/cdp-test.js "$OUT" || fail=1
+timeout 660 node tests/android/cdp-test.js "$OUT" || fail=1
 
 step "Background survival: home screen for 60s"
 adb shell input keyevent KEYCODE_HOME
@@ -83,7 +89,7 @@ check "foreground service survives the swipe" "grep -q 'isForeground=true' $OUT/
 adb shell am start -W -n "$PKG/.ui.MainActivity"
 sleep 5
 shot "after-recents"; texts "after-recents"
-check "reopening shows the main screen again (no re-setup)" "grep -q 'Show Teams' $OUT/after-recents.txt"
+check "reopening shows the main screen again (no re-setup)" "grep -qx 'CRAFTWW' $OUT/after-recents.txt"
 MARK=$(node tests/android/cdp-eval.js "window.__ciMarker")
 echo "marker after reopen: $MARK"
 check "Teams page was kept alive in memory (not reloaded)" "[ \"$MARK\" = 4242 ]"

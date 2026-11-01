@@ -19,6 +19,8 @@ import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.Toast;
 
+import com.workdeck.app.Account;
+import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
 import com.workdeck.app.Site;
@@ -27,6 +29,7 @@ import com.workdeck.app.web.BrowserTab;
 import com.workdeck.app.web.TabManager;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -38,6 +41,9 @@ public final class SetupActivity extends Activity {
 
     private Prefs mPrefs;
     private boolean mFromMenu;
+    /** Accounts the account-type and apps choices apply to (all of them on first run). */
+    private List<Account> mTargets;
+    private Account mShown;
     private String mInitialAccount;
     private Ui.PermRow mMic, mCamera, mNotif, mBt, mBattery, mFullScreen;
     private CheckBox mTeams, mOutlook;
@@ -47,7 +53,10 @@ public final class SetupActivity extends Activity {
         super.onCreate(savedInstanceState);
         mPrefs = Prefs.get(this);
         mFromMenu = getIntent().getBooleanExtra(EXTRA_FROM_MENU, false);
-        mInitialAccount = mPrefs.accountType();
+        Accounts accounts = Accounts.get(this);
+        mShown = accounts.active();
+        mTargets = mFromMenu ? Collections.singletonList(mShown) : accounts.list();
+        mInitialAccount = mShown.type;
         build();
     }
 
@@ -57,6 +66,10 @@ public final class SetupActivity extends Activity {
 
         // 1. account
         Ui.heading(c, getString(R.string.setup_step_account));
+        if (Accounts.get(this).multiple()) {
+            Ui.para(c, mFromMenu ? getString(R.string.setup_applies_to, mShown.name)
+                    : getString(R.string.setup_applies_to_all));
+        }
         LinearLayout accountCard = Ui.card(c);
         RadioGroup group = new RadioGroup(this);
         final RadioButton work = new RadioButton(this);
@@ -67,11 +80,13 @@ public final class SetupActivity extends Activity {
         personal.setId(View.generateViewId());
         group.addView(work);
         group.addView(personal);
-        group.check(Prefs.ACCOUNT_PERSONAL.equals(mPrefs.accountType()) ? personal.getId() : work.getId());
+        group.check(mShown.isPersonal() ? personal.getId() : work.getId());
         group.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(RadioGroup g, int id) {
-                mPrefs.setAccountType(id == personal.getId() ? Prefs.ACCOUNT_PERSONAL : Prefs.ACCOUNT_WORK);
+                String type = id == personal.getId() ? Prefs.ACCOUNT_PERSONAL : Prefs.ACCOUNT_WORK;
+                for (Account a : mTargets) a.type = type;
+                Accounts.get(SetupActivity.this).save();
             }
         });
         accountCard.addView(group);
@@ -81,10 +96,10 @@ public final class SetupActivity extends Activity {
         LinearLayout appsCard = Ui.card(c);
         mTeams = new CheckBox(this);
         mTeams.setText(R.string.site_teams);
-        mTeams.setChecked(mPrefs.siteEnabled(Site.TEAMS));
+        mTeams.setChecked(mShown.siteEnabled(Site.TEAMS));
         mOutlook = new CheckBox(this);
         mOutlook.setText(R.string.site_outlook);
-        mOutlook.setChecked(mPrefs.siteEnabled(Site.OUTLOOK));
+        mOutlook.setChecked(mShown.siteEnabled(Site.OUTLOOK));
         appsCard.addView(mTeams);
         appsCard.addView(mOutlook);
         CompoundButton.OnCheckedChangeListener keepOne = new CompoundButton.OnCheckedChangeListener() {
@@ -303,15 +318,18 @@ public final class SetupActivity extends Activity {
     }
 
     private void finishSetup() {
-        mPrefs.setSiteEnabled(Site.TEAMS, mTeams.isChecked());
-        mPrefs.setSiteEnabled(Site.OUTLOOK, mOutlook.isChecked());
-        mPrefs.setSetupDone(true);
-        if (!mInitialAccount.equals(mPrefs.accountType())) {
-            for (Site s : Site.values()) {
-                BrowserTab t = TabManager.get(this).existing(s);
-                if (t != null && t.isCreated()) t.loadHome();
+        TabManager tabs = TabManager.get(this);
+        for (Account a : mTargets) {
+            a.setSiteEnabled(Site.TEAMS, mTeams.isChecked());
+            a.setSiteEnabled(Site.OUTLOOK, mOutlook.isChecked());
+            if (!mInitialAccount.equals(a.type)) {
+                for (BrowserTab t : tabs.tabsOf(a)) {
+                    if (t.isCreated()) t.loadHome();
+                }
             }
         }
+        Accounts.get(this).save();
+        mPrefs.setSetupDone(true);
         if (!mFromMenu) {
             startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                     | Intent.FLAG_ACTIVITY_CLEAR_TOP));

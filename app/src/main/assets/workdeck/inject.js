@@ -307,12 +307,15 @@
   }
 
   // Badging API -> unread counter in the tab bar and status notification.
+  var pageBadges = false;
   hidden(Navigator.prototype, 'setAppBadge', function (n) {
     var v = (n === undefined) ? -1 : Math.max(0, Math.floor(Number(n) || 0));
+    pageBadges = true;
     if (isTop) call('badge', v);
     return Promise.resolve();
   });
   hidden(Navigator.prototype, 'clearAppBadge', function () {
+    pageBadges = true;
     if (isTop) call('badge', 0);
     return Promise.resolve();
   });
@@ -685,11 +688,104 @@
     document.addEventListener('visibilitychange', queueScan);
   }
 
+  // ------------------------------------------------------------------ Outlook unread mail
+  // Outlook on the web shows no unread count in its title and only raises browser
+  // notifications when they are switched on in Outlook's own settings. So read the
+  // Inbox unread number from the folder pane (or, with the pane closed, count the
+  // unread messages in the list) and report it; Android then notifies about new mail.
+  // DOM changes are not timer-throttled in hidden pages, so this reacts to new mail
+  // right away.
+  var INBOX_NAME = /^\s*(inbox|posteingang|bo[iî]te de r[eé]ception|bandeja de entrada|caixa de entrada|posta in arrivo|postvak in|inkorgen|indbakke|innboks|saapuneet)/i;
+  var UNREAD_N = /(\d{1,6})\s*(unread|ungelesen|non lus?|no le[ií]dos?|n[aã]o lidos?|non lett[ie]|ongelezen|ol[aä]sta|ul[æe]ste)/i;
+  function mailFolderUnread() {
+    var items = document.querySelectorAll('[role="treeitem"]');
+    var best = -1;
+    for (var i = 0; i < items.length && i < 800; i++) {
+      var it = items[i];
+      var fname = String(it.getAttribute('data-folder-name') || '').toLowerCase();
+      var title = it.getAttribute('title') || '';
+      var label = it.getAttribute('aria-label') || '';
+      var text = String(it.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (fname !== 'inbox' && !INBOX_NAME.test(title) && !INBOX_NAME.test(label) && !INBOX_NAME.test(text)) continue;
+      var n = 0, m = UNREAD_N.exec(label + ' ' + title + ' ' + text);
+      if (m) {
+        n = +m[1];
+      } else {
+        // Visible text is the folder name followed by the number, e.g. "Inbox 5" / "Inbox5".
+        var name = (INBOX_NAME.exec(text) || INBOX_NAME.exec(title) || [''])[0];
+        var rest = text.slice(name.length);
+        if (!name && fname === 'inbox') rest = text.replace(/^[^\d]*/, '');
+        m = /^\s*(\d{1,6})(?!\d)/.exec(rest);
+        if (m) n = +m[1];
+      }
+      if (n > best) best = n;
+    }
+    return best;
+  }
+  function mailListUnread() {
+    var rows = document.querySelectorAll('[role="option"][aria-label],[role="row"][aria-label],[role="listitem"][aria-label]');
+    if (!rows.length) return -1;
+    var n = 0;
+    for (var i = 0; i < rows.length && i < 500; i++) {
+      if (/^\s*unread\b|[,;]\s*unread\b/i.test(rows[i].getAttribute('aria-label') || '')) n++;
+    }
+    return n;
+  }
+  if (isTop && CFG.site === 'outlook' && /outlook/i.test(location.hostname) && typeof MutationObserver !== 'undefined') {
+    var mailReported = null, mailSource = '', mailFirstAt = 0, mailLast = 0, mailTrailing = null;
+    var scanMail = function () {
+      if (pageBadges) return; // the page reports its own count via the Badging API
+      var n = mailFolderUnread(), src = 'folder';
+      if (n < 0) { n = mailListUnread(); src = 'list'; }
+      if (n < 0) return;
+      var now = Date.now();
+      // The first readings (and readings after switching between pane and list) are a
+      // starting point, not news: Outlook fills in its counts while loading.
+      var baseline = mailReported === null || src !== mailSource || now - mailFirstAt < 20000;
+      if (mailReported === null || src !== mailSource) mailFirstAt = now;
+      if (n === mailReported && src === mailSource) return;
+      mailReported = n;
+      mailSource = src;
+      log('outlook unread ' + n + ' (' + src + (baseline ? ', baseline' : '') + ')');
+      call('mailUnread', n, baseline ? '1' : '0');
+    };
+    var queueMail = function () {
+      var now = Date.now();
+      if (now - mailLast >= 1500) {
+        mailLast = now;
+        Promise.resolve().then(scanMail);
+      } else if (!mailTrailing) {
+        mailTrailing = setTimeout(function () { mailTrailing = null; mailLast = Date.now(); scanMail(); }, 1600 - (now - mailLast));
+      }
+    };
+    var startMailWatch = function () {
+      try {
+        new MutationObserver(queueMail).observe(document.documentElement, { childList: true, subtree: true,
+          characterData: true, attributes: true, attributeFilter: ['aria-label', 'title'] });
+      } catch (e) {}
+      queueMail();
+      setInterval(queueMail, 60000);
+    };
+    window.addEventListener('load', queueMail);
+    if (document.documentElement) startMailWatch(); else document.addEventListener('DOMContentLoaded', startMailWatch);
+  }
+
   // Best-effort "who wrote" for unread-count notifications: the first unread item in the
   // chat / mail list, read from its accessibility label.
   if (isTop) {
     hidden(window, '__wdUnreadPreview', function () {
       try {
+        if (CFG.site === 'outlook') {
+          // Newest unread mail: first unread row of the message list (sender, subject, preview).
+          var rows = document.querySelectorAll('[role="option"][aria-label],[role="row"][aria-label],[role="listitem"][aria-label]');
+          for (var r = 0; r < rows.length && r < 300; r++) {
+            if (!/^\s*unread\b|[,;]\s*unread\b/i.test(rows[r].getAttribute('aria-label') || '')) continue;
+            var lines = String(rows[r].innerText || rows[r].textContent || '').split('\n')
+              .map(function (x) { return x.trim(); })
+              .filter(function (x) { return x && x.length > 1 && !/^(unread|\d{1,2}:\d{2}( ?[ap]m)?)$/i.test(x); });
+            if (lines.length) return { title: lines[0].slice(0, 80), body: lines.slice(1, 3).join(' - ').slice(0, 240) };
+          }
+        }
         var noise = /^(unread|unread message|new|has unread messages?|\d+ unread( messages?)?|chat|message|selected|pinned|muted)$/i;
         var cands = document.querySelectorAll('[aria-label*="nread" i]');
         for (var i = 0; i < cands.length && i < 300; i++) {

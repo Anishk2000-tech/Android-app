@@ -3,7 +3,7 @@
 
   ui.py texts                 print every visible text / content-description
   ui.py tap "Label" [scrolls] tap the first node whose text or description contains Label,
-                              scrolling down up to N times to find it
+                              scrolling down up to N times to find it ("=Label": exact match)
   ui.py has "Label"           exit 0 if a node with that text/description is on screen
 """
 import re
@@ -39,8 +39,10 @@ def labels(node):
 def find(root, label):
     if root is None:
         return None
+    exact = label.startswith("=")
+    want = label[1:] if exact else label
     for n in root.iter("node"):
-        if any(label in l for l in labels(n) if l):
+        if any((l == want) if exact else (want in l) for l in labels(n) if l):
             return n
     return None
 

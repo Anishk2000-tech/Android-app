@@ -14,4 +14,6 @@ public interface WebViewProviderFactoryBoundaryInterface {
     /* SupportLibWebkitToCompatConverter */ InvocationHandler getWebkitToCompatConverter();
 
     String[] getSupportedFeatures();
+
+    /* ProfileStoreBoundaryInterface */ InvocationHandler getProfileStore();
 }

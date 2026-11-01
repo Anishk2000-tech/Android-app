@@ -7,4 +7,7 @@ import java.lang.reflect.InvocationHandler;
 public interface WebViewProviderBoundaryInterface {
     /* ScriptHandler */ InvocationHandler addDocumentStartJavaScript(
             String script, String[] allowedOriginRules);
+
+    /** Must be called before the WebView loads anything. */
+    void setProfile(String profileName);
 }

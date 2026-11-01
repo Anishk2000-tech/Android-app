@@ -47,21 +47,21 @@ final class SwShim {
         return sShim;
     }
 
-    static WebResourceResponse maybeIntercept(Context c, WebResourceRequest req) {
+    static WebResourceResponse maybeIntercept(Context c, WebResourceRequest req, CookieManager cookies) {
         try {
             if (req == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
             if (!"script".equalsIgnoreCase(header(req.getRequestHeaders(), "Service-Worker"))) return null;
             String url = req.getUrl().toString();
             if (!UrlRouter.isInjectable(url) || !Prefs.get(c).swShim()) return null;
-            return fetchWithShim(c, url, req.getRequestHeaders());
+            return fetchWithShim(c, url, req.getRequestHeaders(), cookies);
         } catch (Throwable t) {
             Log.w(TAG, "shim failed", t);
             return null;
         }
     }
 
-    private static WebResourceResponse fetchWithShim(Context c, String url, Map<String, String> reqHeaders)
-            throws IOException {
+    private static WebResourceResponse fetchWithShim(Context c, String url, Map<String, String> reqHeaders,
+            CookieManager cookies) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {
             conn.setInstanceFollowRedirects(false);
@@ -77,7 +77,7 @@ final class SwShim {
                     conn.setRequestProperty(e.getKey(), e.getValue());
                 }
             }
-            String cookie = CookieManager.getInstance().getCookie(url);
+            String cookie = cookies.getCookie(url);
             if (cookie != null && !cookie.isEmpty()) conn.setRequestProperty("Cookie", cookie);
             int code = conn.getResponseCode();
             if (code != 200) return null;
@@ -90,7 +90,7 @@ final class SwShim {
                 if (k == null || e.getValue() == null || e.getValue().isEmpty()) continue;
                 String lk = k.toLowerCase(Locale.ROOT);
                 if (lk.equals("set-cookie")) {
-                    for (String v : e.getValue()) CookieManager.getInstance().setCookie(url, v);
+                    for (String v : e.getValue()) cookies.setCookie(url, v);
                     continue;
                 }
                 if (lk.equals("content-length") || lk.equals("content-encoding") || lk.equals("transfer-encoding")

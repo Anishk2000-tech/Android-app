@@ -7,24 +7,29 @@ import android.util.Log;
 import android.webkit.CookieManager;
 import android.webkit.ServiceWorkerClient;
 import android.webkit.ServiceWorkerController;
+import android.webkit.ValueCallback;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
 
+import com.workdeck.app.Account;
+import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.Site;
 import com.workdeck.app.call.CallManager;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Process-wide owner of the Teams and Outlook tabs. Lives as long as the process,
- * independent of any activity, which is what lets the web apps keep running (and
- * notifying) after the UI is closed.
+ * Process-wide owner of every account's Teams and Outlook tabs. Lives as long as the
+ * process, independent of any activity, which is what lets the web apps keep running
+ * (and notifying) after the UI is closed.
  */
 public final class TabManager {
     private static final String TAG = "WorkDeck/Tabs";
@@ -32,8 +37,11 @@ public final class TabManager {
     private static TabManager sInstance;
 
     private final Context mApp;
-    private final Map<Site, BrowserTab> mTabs = new EnumMap<>(Site.class);
+    private final Map<String, BrowserTab> mTabs = new LinkedHashMap<>();
+    private final Set<String> mProfilesReady = new HashSet<>();
+    private final List<BrowserTab.Listener> mGlobalListeners = new ArrayList<>();
     private boolean mWebInitialized;
+    private TabHost mHost;
 
     public static synchronized TabManager get(Context c) {
         if (sInstance == null) sInstance = new TabManager(c.getApplicationContext());
@@ -50,63 +58,116 @@ public final class TabManager {
         UserAgents.init(mApp);
         boolean debuggable = (mApp.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         if (debuggable || Prefs.get(mApp).webDebugging()) WebView.setWebContentsDebuggingEnabled(true);
+    }
+
+    /** Service-worker requests of each profile go through the notification shim. */
+    private void initProfile(String profile) {
+        if (!mProfilesReady.add(profile)) return;
         try {
-            ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
+            ServiceWorkerController swc = WebViewSupport.serviceWorkers(profile);
+            if (swc == null) return;
+            final CookieManager cookies = WebViewSupport.cookieManager(profile);
+            swc.setServiceWorkerClient(new ServiceWorkerClient() {
                 @Override
                 public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
-                    return SwShim.maybeIntercept(mApp, request);
+                    return SwShim.maybeIntercept(mApp, request, cookies);
                 }
             });
         } catch (Throwable t) {
-            Log.w(TAG, "service worker client unavailable", t);
+            Log.w(TAG, "service worker client unavailable for " + profile, t);
         }
     }
 
-    /** Returns the tab for an enabled site, creating the object (not the WebView) lazily. */
-    public BrowserTab tab(Site site) {
-        if (!Prefs.get(mApp).siteEnabled(site)) return null;
+    /** The tab for an account's site (object only; the WebView is created on start). */
+    public BrowserTab tab(Account account, Site site) {
+        if (account == null || !account.siteEnabled(site)) return null;
         initWeb();
-        BrowserTab t = mTabs.get(site);
+        String key = account.key(site);
+        BrowserTab t = mTabs.get(key);
         if (t == null) {
-            t = new BrowserTab(mApp, site);
-            mTabs.put(site, t);
+            initProfile(account.profile);
+            t = new BrowserTab(mApp, account, site);
+            if (mHost != null) t.setHost(mHost);
+            for (BrowserTab.Listener l : mGlobalListeners) t.addListener(l);
+            mTabs.put(key, t);
         }
         return t;
     }
 
-    public BrowserTab existing(Site site) {
-        return mTabs.get(site);
+    public BrowserTab existing(String key) {
+        return key == null ? null : mTabs.get(key);
     }
 
-    public List<BrowserTab> enabledTabs() {
+    /** All tab objects that exist (created on demand). */
+    public List<BrowserTab> allTabs() {
+        return new ArrayList<>(mTabs.values());
+    }
+
+    public List<BrowserTab> tabsOf(Account a) {
         List<BrowserTab> out = new ArrayList<>();
-        for (Site s : Site.values()) {
-            BrowserTab t = tab(s);
-            if (t != null) out.add(t);
-        }
+        for (BrowserTab t : mTabs.values()) if (t.account.id.equals(a.id)) out.add(t);
         return out;
     }
 
-    /** Make sure every enabled site is loaded (used by the activity and the background service). */
-    public void startAll() {
-        for (Site s : Site.values()) {
-            BrowserTab t = tab(s);
-            if (t != null) {
-                t.ensureStarted();
-            } else {
-                BrowserTab old = mTabs.remove(s);
-                if (old != null) old.destroy();
+    /** Listener added to every tab, including tabs created later (used by the service). */
+    public void addGlobalListener(BrowserTab.Listener l) {
+        if (mGlobalListeners.contains(l)) return;
+        mGlobalListeners.add(l);
+        for (BrowserTab t : mTabs.values()) t.addListener(l);
+    }
+
+    public void removeGlobalListener(BrowserTab.Listener l) {
+        mGlobalListeners.remove(l);
+        for (BrowserTab t : mTabs.values()) t.removeListener(l);
+    }
+
+    /**
+     * Starts every tab that should be running: sites the user has opened before, for
+     * accounts that keep running in the background. Removes tabs of deleted accounts
+     * or disabled sites.
+     */
+    public void startBackground() {
+        Accounts accounts = Accounts.get(mApp);
+        Account active = accounts.active();
+        for (Account a : accounts.list()) {
+            for (Site s : Site.values()) {
+                if (a.siteEnabled(s) && a.wasOpened(s) && (a.background || a == active)) tab(a, s).ensureStarted();
+            }
+        }
+        for (BrowserTab t : allTabs()) {
+            if (!stillValid(t)) {
+                t.destroy();
+                mTabs.remove(t.key);
             }
         }
     }
 
+    private boolean stillValid(BrowserTab t) {
+        Account a = Accounts.get(mApp).find(t.account.id);
+        return a != null && a.siteEnabled(t.site);
+    }
+
+    /** Removes the tabs of an account (or of one disabled site). */
+    public void destroyTabsOf(Account a) {
+        for (BrowserTab t : tabsOf(a)) {
+            t.destroy();
+            mTabs.remove(t.key);
+        }
+    }
+
+    public void destroyTab(BrowserTab t) {
+        t.destroy();
+        mTabs.remove(t.key);
+    }
+
     public void setHost(TabHost host) {
+        mHost = host;
         for (BrowserTab t : mTabs.values()) t.setHost(host);
     }
 
-    public int totalUnread() {
+    public int unreadOf(Account a) {
         int n = 0;
-        for (BrowserTab t : mTabs.values()) n += Math.max(0, t.unreadCount());
+        for (BrowserTab t : tabsOf(a)) n += Math.max(0, t.unreadCount());
         return n;
     }
 
@@ -123,7 +184,7 @@ public final class TabManager {
         long now = SystemClock.elapsedRealtime();
         for (BrowserTab t : mTabs.values()) {
             if (t.isCreated() && t.loadedAt() > 0 && now - t.loadedAt() > AUTO_REFRESH_AFTER_MS) {
-                Log.i(TAG, "auto-refreshing " + t.site.key);
+                Log.i(TAG, "auto-refreshing " + t.key);
                 t.reload();
             }
         }
@@ -133,31 +194,79 @@ public final class TabManager {
         for (BrowserTab t : mTabs.values()) t.refreshLayoutWidth();
     }
 
-    public void destroyAll() {
-        for (BrowserTab t : mTabs.values()) t.destroy();
-        mTabs.clear();
+    public void flushCookies() {
+        Set<String> done = new HashSet<>();
+        for (BrowserTab t : mTabs.values()) {
+            if (done.add(t.account.profile)) t.cookies().flush();
+        }
         CookieManager.getInstance().flush();
     }
 
-    /** Signs out of everything: wipes cookies, storage and cache, then reloads. */
-    public void clearAllData(final Runnable done) {
-        for (BrowserTab t : mTabs.values()) {
+    public void destroyAll() {
+        flushCookies();
+        for (BrowserTab t : mTabs.values()) t.destroy();
+        mTabs.clear();
+    }
+
+    /** Signs one account out: wipes its cookies, storage and cache, then reloads its tabs. */
+    public void clearAccountData(final Account a, final Runnable done) {
+        if (!a.usesDefaultProfile() && !WebViewSupport.supportsProfiles()) {
+            // This account never had a profile of its own: there is nothing to clear, and
+            // the fallback cookie jar belongs to the first account.
+            if (done != null) done.run();
+            return;
+        }
+        for (BrowserTab t : tabsOf(a)) {
             if (t.webView() != null) {
                 t.webView().clearCache(true);
                 t.webView().clearHistory();
             }
         }
-        WebStorage.getInstance().deleteAllData();
-        CookieManager.getInstance().removeAllCookies(new android.webkit.ValueCallback<Boolean>() {
+        WebStorage storage = WebViewSupport.webStorage(a.profile);
+        if (storage != null) storage.deleteAllData();
+        final CookieManager cm = WebViewSupport.cookieManager(a.profile);
+        cm.removeAllCookies(new ValueCallback<Boolean>() {
             @Override
             public void onReceiveValue(Boolean value) {
-                CookieManager.getInstance().flush();
-                for (BrowserTab t : mTabs.values()) {
+                cm.flush();
+                for (BrowserTab t : tabsOf(a)) {
                     if (t.isCreated()) t.loadHome();
                 }
                 if (done != null) done.run();
             }
         });
+    }
+
+    /** Signs every account out. */
+    public void clearAllData(final Runnable done) {
+        final List<Account> all = Accounts.get(mApp).list();
+        final int[] left = {all.size()};
+        for (Account a : all) {
+            clearAccountData(a, new Runnable() {
+                @Override
+                public void run() {
+                    if (--left[0] == 0 && done != null) done.run();
+                }
+            });
+        }
+    }
+
+    /** Deletes an account: its tabs, and its WebView profile with all its data. */
+    public void deleteAccount(Account a) {
+        destroyTabsOf(a);
+        final String profile = a.profile;
+        if (!WebViewSupport.DEFAULT_PROFILE.equals(profile)) {
+            // The profile can only be deleted once no WebView uses it any more.
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (!WebViewSupport.deleteProfile(profile)) Log.w(TAG, "profile " + profile + " kept");
+                }
+            }, 1500);
+        } else {
+            clearAccountData(a, null);
+        }
+        Accounts.get(mApp).remove(a);
     }
 
     public static boolean webViewAvailable(Context c) {

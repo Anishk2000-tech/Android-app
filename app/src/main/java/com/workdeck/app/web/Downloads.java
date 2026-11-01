@@ -53,11 +53,11 @@ public final class Downloads {
     }
 
     public static void enqueueHttp(Context c, String url, String userAgent, String contentDisposition,
-            String mime) {
+            String mime, CookieManager cookies) {
         try {
             String name = URLUtil.guessFileName(url, contentDisposition, mime);
             DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
-            String cookie = CookieManager.getInstance().getCookie(url);
+            String cookie = cookies.getCookie(url);
             if (cookie != null) r.addRequestHeader("Cookie", cookie);
             if (userAgent != null) r.addRequestHeader("User-Agent", userAgent);
             r.setTitle(name);

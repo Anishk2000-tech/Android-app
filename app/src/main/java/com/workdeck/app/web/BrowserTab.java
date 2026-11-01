@@ -41,6 +41,8 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import com.workdeck.app.Account;
+import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
 import com.workdeck.app.Site;
@@ -69,8 +71,14 @@ public final class BrowserTab {
     private static String sScriptTemplate;
 
     public final Site site;
+    public final Account account;
+    /** Unique id of this tab: "accountId|site". */
+    public final String key;
     private final Context mApp;
     private final Prefs mPrefs;
+    private CookieManager mCookies;
+    /** This account needs its own WebView profile but the installed WebView can't do that. */
+    private boolean mProfileMissing;
     private final Handler mMain = new Handler(Looper.getMainLooper());
 
     private MutableContextWrapper mContext;
@@ -95,10 +103,27 @@ public final class BrowserTab {
         void onTabChanged(BrowserTab tab);
     }
 
-    BrowserTab(Context app, Site site) {
+    BrowserTab(Context app, Account account, Site site) {
         mApp = app.getApplicationContext();
         mPrefs = Prefs.get(mApp);
+        this.account = account;
         this.site = site;
+        this.key = account.key(site);
+    }
+
+    /** Cookie jar of this account's WebView profile. */
+    public CookieManager cookies() {
+        if (mCookies == null) mCookies = WebViewSupport.cookieManager(account.profile);
+        return mCookies;
+    }
+
+    public boolean profileMissing() {
+        return mProfileMissing;
+    }
+
+    /** "CRAFTWW · Teams" */
+    public String label() {
+        return account.name + " · " + mApp.getString(site.titleRes);
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -128,11 +153,14 @@ public final class BrowserTab {
         if (a != null) mContext.setBaseContext(a);
         WebView wv = new WebView(mContext);
         mWebView = wv;
+        // Each account has its own profile (cookies, sign-in, storage). This must be the
+        // very first thing done with a new WebView.
+        mProfileMissing = !WebViewSupport.setProfile(wv, account.profile);
         mToken = newToken();
-        mDesktop = mPrefs.isDesktop(site);
+        mDesktop = account.isDesktop(site);
 
-        applySettings(wv, mDesktop, mPrefs.textZoom(site), site);
-        CookieManager cm = CookieManager.getInstance();
+        applySettings(wv, mDesktop, account.textZoom(site), site);
+        CookieManager cm = cookies();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(wv, true);
         if (Build.VERSION.SDK_INT >= 26) {
@@ -148,7 +176,8 @@ public final class BrowserTab {
         wv.setDownloadListener(new TabDownloads(wv));
         registerScript();
         layoutHeadless();
-        Log.i(TAG, site.key + ": WebView created, docStart=" + mDocStartSupported);
+        Log.i(TAG, key + ": WebView created in profile " + account.profile + ", docStart=" + mDocStartSupported
+                + (mProfileMissing ? ", PROFILE UNSUPPORTED" : ""));
     }
 
     /** Shared settings for tab WebViews and their popups. */
@@ -257,7 +286,7 @@ public final class BrowserTab {
         if (parent != null) parent.removeView(mWebView);
         setHost(null);
         layoutHeadless();
-        CookieManager.getInstance().flush();
+        cookies().flush();
     }
 
     public void destroy() {
@@ -276,7 +305,7 @@ public final class BrowserTab {
         }
         mWebView = null;
         mStarted = false;
-        CallManager.get(mApp).resetPageMic(site);
+        CallManager.get(mApp).resetPageMic(key);
     }
 
     /** The shared renderer died (usually low memory): rebuild this tab from scratch. */
@@ -296,7 +325,15 @@ public final class BrowserTab {
     // ------------------------------------------------------------------ navigation
 
     public void loadHome() {
-        loadUrl(mPrefs.homeUrl(site));
+        if (mProfileMissing) {
+            if (mWebView == null) create();
+            mStarted = true;
+            mWebView.loadDataWithBaseURL(null, Assets.readText(mApp, "workdeck/needs-update.html")
+                    .replace("{ACCOUNT}", android.text.Html.escapeHtml(account.name)), "text/html", "utf-8", null);
+            changed();
+            return;
+        }
+        loadUrl(account.homeUrl(site));
     }
 
     public void loadUrl(String url) {
@@ -349,11 +386,12 @@ public final class BrowserTab {
     }
 
     public void setDesktop(boolean desktop) {
-        mPrefs.setViewMode(site, desktop ? Prefs.VIEW_DESKTOP : Prefs.VIEW_MOBILE);
+        account.setDesktop(site, desktop);
+        Accounts.get(mApp).save();
         if (mWebView == null) return;
         mDesktop = desktop;
-        Log.i(TAG, site.key + ": view mode -> " + (desktop ? "desktop" : "mobile"));
-        applySettings(mWebView, mDesktop, mPrefs.textZoom(site), site);
+        Log.i(TAG, key + ": view mode -> " + (desktop ? "desktop" : "mobile"));
+        applySettings(mWebView, mDesktop, account.textZoom(site), site);
         registerScript();
         // A fresh navigation (not reload) guarantees the new identity is used everywhere.
         String url = mWebView.getUrl();
@@ -392,12 +430,13 @@ public final class BrowserTab {
     }
 
     public int textZoom() {
-        return mPrefs.textZoom(site);
+        return account.textZoom(site);
     }
 
     public void setTextZoom(int percent) {
         percent = Math.max(50, Math.min(250, percent));
-        mPrefs.setTextZoom(site, percent);
+        account.setTextZoom(site, percent);
+        Accounts.get(mApp).save();
         if (mWebView != null) mWebView.getSettings().setTextZoom(percent);
     }
 
@@ -429,6 +468,12 @@ public final class BrowserTab {
         mBadgeUnread = n < 0 ? -1 : n;
         unreadMaybeChanged(before);
         changed();
+    }
+
+    /** Unread count read from the page itself (Outlook's Inbox). */
+    void setScrapedUnread(int n, boolean baseline) {
+        if (baseline) Notifier.get(mApp).setUnreadBaseline(key, n);
+        setBadgeCount(n);
     }
 
     private void unreadMaybeChanged(int before) {
@@ -466,7 +511,7 @@ public final class BrowserTab {
 
     /** The site says this browser engine is too old (outdated Android System WebView). */
     void onBrowserUnsupported() {
-        Log.w(TAG, site.key + ": site reports unsupported browser (WebView " + UserAgents.chromeFull() + ")");
+        Log.w(TAG, key + ": site reports unsupported browser (WebView " + UserAgents.chromeFull() + ")");
         if (mHost != null) mHost.onBrowserOutdated(UserAgents.chromeMajor());
     }
 
@@ -492,9 +537,9 @@ public final class BrowserTab {
         if (url == null) return false;
         if (UrlRouter.isHttp(url)) {
             Site target = UrlRouter.siteFor(url);
-            if (target != null && target != site && mHost != null && mPrefs.siteEnabled(target)
+            if (target != null && target != site && mHost != null && account.siteEnabled(target)
                     && (userGesture || !isRedirect)) {
-                mHost.switchToSite(target, url);
+                mHost.switchToSite(this, target, url);
                 return true;
             }
             String current = view.getUrl();
@@ -510,14 +555,14 @@ public final class BrowserTab {
             return false;
         }
         if (url.startsWith("msteams:")) {
-            if (site != Site.TEAMS && mHost != null && mPrefs.siteEnabled(Site.TEAMS)) {
-                mHost.switchToSite(Site.TEAMS, UrlRouter.msteamsToHttps(url));
+            if (site != Site.TEAMS && mHost != null && account.siteEnabled(Site.TEAMS)) {
+                mHost.switchToSite(this, Site.TEAMS, UrlRouter.msteamsToHttps(url));
             }
             return true; // never try to launch the Teams desktop/mobile app
         }
         if (url.startsWith("mailto:")) {
-            if (mPrefs.siteEnabled(Site.OUTLOOK) && mHost != null) {
-                mHost.switchToSite(Site.OUTLOOK, UrlRouter.mailtoToOutlook(url, mPrefs.homeUrl(Site.OUTLOOK)));
+            if (account.siteEnabled(Site.OUTLOOK) && mHost != null) {
+                mHost.switchToSite(this, Site.OUTLOOK, UrlRouter.mailtoToOutlook(url, account.homeUrl(Site.OUTLOOK)));
             } else {
                 openExternal(url);
             }
@@ -563,8 +608,10 @@ public final class BrowserTab {
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     public WebView createPopupWebView(Activity activity) {
         WebView w = new WebView(activity);
-        applySettings(w, mDesktop, mPrefs.textZoom(site), site);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
+        // Popups must live in the same profile (same sign-in) as the page that opened them.
+        WebViewSupport.setProfile(w, account.profile);
+        applySettings(w, mDesktop, account.textZoom(site), site);
+        cookies().setAcceptThirdPartyCookies(w, true);
         w.addJavascriptInterface(new JsBridge(this, mApp, mToken), BRIDGE_NAME);
         WebViewSupport.addDocumentStartScript(w, buildScript(), UrlRouter.injectionOriginRules());
         w.setWebViewClient(new PopupClient());
@@ -584,9 +631,9 @@ public final class BrowserTab {
             mDecided = true;
             if (mHost == null) return true;
             Site target = UrlRouter.siteFor(url);
-            if (target != null && target != site && mPrefs.siteEnabled(target)) {
+            if (target != null && target != site && account.siteEnabled(target)) {
                 mHost.closePopup(view);
-                mHost.switchToSite(target, url);
+                mHost.switchToSite(BrowserTab.this, target, url);
                 return true;
             }
             if (!UrlRouter.isHttp(url)) {
@@ -618,7 +665,7 @@ public final class BrowserTab {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            return SwShim.maybeIntercept(mApp, request);
+            return SwShim.maybeIntercept(mApp, request, cookies());
         }
 
         @Override
@@ -652,8 +699,8 @@ public final class BrowserTab {
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             mLoadedAt = SystemClock.elapsedRealtime();
             mError = null;
-            CallManager.get(mApp).resetPageMic(site);
-            Notifier.get(mApp).resetUnreadBaseline(site);
+            CallManager.get(mApp).resetPageMic(key);
+            Notifier.get(mApp).resetUnreadBaseline(key);
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
             changed();
         }
@@ -661,7 +708,7 @@ public final class BrowserTab {
         @Override
         public void onPageFinished(WebView view, String url) {
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
-            CookieManager.getInstance().flush();
+            cookies().flush();
             if (site == Site.TEAMS && url != null && UrlRouter.isTeams(url)
                     && (url.contains("/dl/launcher") || url.contains("/l/meetup-join") || url.contains("/l/"))) {
                 chooseWebAppOnLauncher(0);
@@ -680,12 +727,12 @@ public final class BrowserTab {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            return SwShim.maybeIntercept(mApp, request);
+            return SwShim.maybeIntercept(mApp, request, cookies());
         }
 
         @Override
         public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
-            Log.w(TAG, site.key + ": renderer gone, crashed=" + detail.didCrash());
+            Log.w(TAG, key + ": renderer gone, crashed=" + detail.didCrash());
             if (view != mWebView) {
                 // A popup lost its renderer: close it.
                 if (mHost != null) mHost.closePopup(view);
@@ -984,7 +1031,7 @@ public final class BrowserTab {
                         + JSONObject.quote(mimetype == null ? "" : mimetype) + ")", null);
                 Toast.makeText(mApp, R.string.download_preparing, Toast.LENGTH_SHORT).show();
             } else if (UrlRouter.isHttp(url)) {
-                Downloads.enqueueHttp(mApp, url, userAgent, contentDisposition, mimetype);
+                Downloads.enqueueHttp(mApp, url, userAgent, contentDisposition, mimetype, cookies());
             }
         }
     }

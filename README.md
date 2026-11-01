@@ -1,10 +1,11 @@
 # WorkDeck — Teams + Outlook on Android, without the official apps
 
-WorkDeck is a small Android app (≈125 KB) that runs **Microsoft Teams** and **Outlook** on the web inside the phone's own Chrome engine (Android System WebView). It is built to do the things the "desktop browser" apps can't:
+WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **Outlook** on the web inside the phone's own Chrome engine (Android System WebView). It is built to do the things the "desktop browser" apps can't:
 
 | Feature | How WorkDeck does it |
 |---|---|
-| **Stay signed in** | Your Microsoft sign-in (cookies + storage) is never cleared — not when you close the app, swipe it from Recents, or restart the phone. Only a password change, a Microsoft-side sign-out, or *Settings → Sign out & clear all data* ends it. |
+| **Stay signed in** | Your Microsoft sign-in (cookies + storage) is never cleared — not when you close the app, swipe it from Recents, or restart the phone. Only a password change, a Microsoft-side sign-out, or signing out in WorkDeck ends it. |
+| **Several Microsoft accounts** | One drop-up per account in the bottom bar — **CRAFTWW**, **OMC**, **ACXIOM** to start with, and **+** to add more. Each account has its own Teams + Outlook, its own sign-in and its own settings, and they all notify at the same time. |
 | **Teams calls with mic & speaker** | Grants the microphone/camera to Teams' WebRTC calling (the reason other apps fail). During a call a **speaker button** switches between **Speaker, Phone earpiece, Bluetooth, Headset**. Bluetooth/wired headsets are used automatically when connected. |
 | **Background notifications** | A foreground service keeps Teams & Outlook connected. Web notifications are turned into real Android notifications (with sound, lock-screen, tap-to-open). Incoming calls ring and show a **full-screen call alert** with *Answer / Decline*. |
 | **Stays in memory** | Teams & Outlook keep running even after the app is closed or swiped away from Recents, and start again after a reboot. |
@@ -17,6 +18,13 @@ WorkDeck is a small Android app (≈125 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## What's new in 1.2.0
+* **Several Microsoft accounts at once.** The bottom bar now shows one button per account: **CRAFTWW**, **OMC** and **ACXIOM**. Tap one and a **drop-up** opens with that account's **Teams** and **Outlook** (with unread counts) and its settings. Tap **+** to add another account; rename, re-colour, re-order or delete accounts under ⋮ → **Manage accounts**.
+* **Every account is completely separate:** its own Microsoft sign-in, cookies and storage (signing in or out of one never touches the others), and its **own settings** — work/personal, Teams and/or Outlook, desktop/mobile view, text size, notifications, *keep running*, custom start pages.
+* **All accounts notify in the background.** Notifications say which account they belong to (e.g. *OMC · Teams*), and tapping one opens the right account. The red number on an account button is its total unread.
+* **Outlook notifications fixed.** Outlook on the web shows no unread count in its title and only sends browser notifications when switched on in its own settings, so WorkDeck got nothing. WorkDeck now reads the **Inbox unread number** itself and notifies you about new mail (with the sender and subject), and removes the notification when the mail is read.
+* **Updating from 1.1.0:** install over it — you stay signed in. Your existing sign-in becomes the **CRAFTWW** account (rename it if it's a different company). The other accounts need an up-to-date **Android System WebView** (Play Store); if it's too old, those accounts show an *update WebView* page instead of mixing up sign-ins.
+
 ## What's new in 1.1.0
 * **Teams now detects the phone's microphone, camera and speaker.** Android WebView tells websites that microphone/camera are "blocked" and hides all device names, so Teams thought there were none. WorkDeck now answers from Android's real permissions and gives Teams a proper device list: *Phone microphone*, *Front/Back camera*, and speakers *Phone speaker (loud)*, *Phone earpiece*, *Bluetooth*, *Headset*. Choosing a speaker in Teams' device settings switches Android's call audio.
 * **Message notifications even when Teams doesn't send one.** When the unread count goes up while you're not looking, WorkDeck posts a notification itself (with the sender and message preview when it can read them). If Teams does send its own notification, that one is used instead — no duplicates.
@@ -26,7 +34,7 @@ WorkDeck is a small Android app (≈125 KB) that runs **Microsoft Teams** and **
 ## 1. Install (step by step)
 
 1. **Download the APK** on your phone:
-   open **[release/WorkDeck-1.1.0.apk](release/WorkDeck-1.1.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
+   open **[release/WorkDeck-1.2.0.apk](release/WorkDeck-1.2.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
 2. Open the downloaded file (tap the download notification, or open *Files → Downloads*).
 3. If Android says *"For your security, your phone is not allowed to install unknown apps from this source"*: tap **Settings → turn on "Allow from this source"**, then go back.
 4. Tap **Install**. If **Play Protect** warns about an unknown app, tap **More details → Install anyway** (it warns about every app not from the Play Store).
@@ -38,7 +46,7 @@ Requirements: Android 8.0 or newer, and an up-to-date **Android System WebView**
 
 The setup screen opens automatically:
 
-1. **Your Microsoft account** — choose *Work or school (Microsoft 365)* or *Personal (Outlook.com / Hotmail / Teams free)*.
+1. **Your Microsoft account** — choose *Work or school (Microsoft 365)* or *Personal (Outlook.com / Hotmail / Teams free)*. (On first setup this is used for all accounts; each account can be changed later.)
 2. **What do you want to use?** — Teams, Outlook, or both.
 3. **Permissions** — tap **Allow everything** and accept every Android prompt:
    * **Microphone** (needed for calls), **Camera** (video), **Notifications**, **Nearby devices** (Bluetooth headsets),
@@ -47,15 +55,16 @@ The setup screen opens automatically:
    * On Xiaomi / Redmi / POCO / Oppo / Realme / Vivo / OnePlus / Samsung / Huawei / Honor phones also tap **Open** next to *Phone-maker battery settings* and allow **Autostart** / set battery to **No restrictions / Unrestricted**. Then open Recents and **lock** WorkDeck (padlock icon) if your phone has that.
 4. Tap **Start WorkDeck**.
 
-## 3. Sign in
+## 3. Sign in (once per account)
 
-1. The **Teams** tab shows the Microsoft sign-in page. Enter your email and password (and your company's sign-in / MFA if asked).
+1. WorkDeck opens **CRAFTWW → Teams**, showing the Microsoft sign-in page. Enter that account's email and password (and the company's sign-in / MFA if asked).
 2. When Microsoft asks **"Stay signed in?" → tap Yes** (tick "Don't show this again"). This is what keeps you signed in permanently.
-3. Tap the **Outlook** tab. It normally signs in automatically with the same account (otherwise sign in once the same way).
+3. Tap **CRAFTWW** in the bottom bar → **Outlook**. It normally signs in automatically with the same account (otherwise sign in once the same way).
+4. Tap **OMC** → **Teams** and sign in with the OMC Microsoft account; then **OMC → Outlook**. Do the same for **ACXIOM**. Each account remembers its own sign-in.
 
 ### Turn on notifications inside Teams / Outlook (once)
 * **Teams**: notifications are on by default. To check: profile picture → **Settings → Notifications and activity**.
-* **Outlook**: **Settings (gear) → General → Notifications** → turn on **desktop notifications** for new mail (and calendar reminders).
+* **Outlook**: WorkDeck notifies about new Inbox mail by itself. For calendar reminders too, turn on **Settings (gear) → General → Notifications → desktop notifications** in Outlook (once per account).
 
 ## 4. Using WorkDeck
 
@@ -63,14 +72,22 @@ The bottom bar:
 
 | Button | What it does |
 |---|---|
-| **Teams** / **Outlook** | Switch app. Red badge = unread count. |
+| **CRAFTWW** / **OMC** / **ACXIOM** … | Tap: drop-up with that account's **Teams** and **Outlook** (unread counts in brackets) and *settings…*. **Long-press**: jump straight to the app that account used last. The highlighted button (with the Teams/Outlook icon) is the one on screen. Red badge = that account's unread total. |
+| **+** | Add another Microsoft account. |
 | 🔊 **Speaker** (only during a call) | Tap: cycle Speaker → Earpiece → Bluetooth. Long-press: pick from a list. |
 | 🖥 / 📱 | Switch **desktop ⟷ mobile view** for the current app. |
 | 🔍 **Zoom** | Shows the zoom bar: **−  Fit  +**, text size **A− / A+**, and the desktop page **Width** (smaller width = bigger text). Pinch-zoom works too. |
-| ⋮ **Menu** | Reload, start page, hide toolbar (full screen), open in browser, Setup & permissions, Settings, **Quit**. |
+| ⋮ **Menu** | Reload, start page, hide toolbar (full screen), open in browser, **Manage accounts**, **Add account**, Setup & permissions, Settings, **Quit**. |
 
 * The **back** button goes back inside Teams/Outlook; at the start it just goes to the home screen and WorkDeck **keeps running**.
 * The notification **"WorkDeck is connected"** must stay (Android requires it for background apps). You can long-press it → turn the "Running in background" category to *silent/minimized*. Its **Quit** button fully stops WorkDeck (you stay signed in).
+
+### Accounts
+* **Switching:** tap the account's name, then *Teams* or *Outlook*. Everything keeps running in the background, so switching is instant and every account keeps notifying.
+* **Add an account:** **+** in the bottom bar (or ⋮ → *Add account*): type a short name (e.g. the company), choose work or personal, then sign in.
+* **Account settings:** tap the account → *NAME settings…* (or ⋮ → *Manage accounts* → the account): **name**, **colour**, work/personal, **use Teams / use Outlook**, desktop/mobile view per app, custom start pages, **keep running for notifications**, Teams/Outlook notifications on/off, **move left/right**, **sign out of this account**, **delete account**.
+* **Memory:** every account that keeps running holds its Teams and Outlook in memory. An account starts running the first time you open it. On phones with little memory, switch *Keep running for notifications* off for accounts you rarely use (they still work when you open them).
+* Links opened from other apps (meeting links, `mailto:`) open in the account that's on screen.
 
 ### Calls
 * **Incoming call:** the phone rings and shows *Incoming Teams call* (full-screen on the lock screen). Tap **Answer** (WorkDeck opens Teams and presses Accept for you — if not, tap Teams' green **Accept** button) or tap **Decline**.
@@ -81,18 +98,20 @@ The bottom bar:
 * **Meeting links** from mail or other apps: choose **WorkDeck** when Android asks which app to open them with.
 
 ### Settings (⋮ → Settings)
-Account type, enable Teams/Outlook, custom start pages (special Microsoft clouds), default view per app, desktop width, *Keep running in background*, *Reliable mode* (keeps the processor awake for instant notifications — uses more battery, on by default), *Start after restart*, per-app notifications, call alerts/ringing, default call audio, picture-in-picture, **Sign out & clear all data**.
+**Accounts** (opens *Manage accounts*), desktop width, *Keep running in background*, *Reliable mode* (keeps the processor awake for instant notifications — uses more battery, on by default), *Start after restart*, call alerts/ringing, default call audio, picture-in-picture, **Sign out of all accounts**. Everything that belongs to one account (type, apps, view, notifications, custom start pages) is in that account's settings.
 
 ## 5. Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | No notifications after a while | ⋮ → **Setup & permissions**: everything should say *Allowed ✓*. Do the phone-maker step (Autostart, battery *Unrestricted*, lock in Recents). See [dontkillmyapp.com](https://dontkillmyapp.com) for your phone. Keep *Reliable mode* on. |
-| Outlook mail notifications missing | Turn on desktop notifications in Outlook settings (section 3). |
+| Outlook mail notifications missing | Open that account's Outlook once so it starts running; check the account's settings: *Keep running for notifications* and *Outlook notifications* on. Keep Outlook's folder list or message list on its **Inbox**. |
+| OMC / ACXIOM / a new account shows *"please update Android System WebView"* | Separate sign-ins need a recent WebView. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Quit and reopen WorkDeck. The first account (CRAFTWW) keeps working meanwhile. |
+| Two accounts show the same person | They can't share a sign-in (each has its own storage) — you signed in with the same email twice. Open the account's settings → *Sign out of this account* and sign in with the right email. |
 | Call: others can't hear me | Setup must show *Microphone: Allowed ✓*. In the Teams call, open **More → Settings → Device settings** and pick the default microphone. |
 | No sound / wrong speaker | Tap the speaker button in the bottom bar during the call. |
 | "Your browser version isn't supported" / blank page | WorkDeck shows a prompt with **Update WebView / Update Chrome** buttons when Microsoft reports this. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Reload. (Teams only supports the latest few Chrome versions.) |
-| Sign-in loops / wrong account | ⋮ → Settings → **Sign out & clear all data**, then sign in again. |
+| Sign-in loops / wrong account | Account settings → **Sign out of this account** (or ⋮ → Settings → *Sign out of all accounts*), then sign in again. |
 | Company says device not allowed | Your organisation's policy (e.g. Intune / Conditional Access) may only allow approved apps. WorkDeck can't bypass that. |
 | Text too small in desktop view | Zoom button → choose a smaller **Width** (e.g. 800px) or use **A+**. Or switch to mobile view. |
 
@@ -164,20 +183,23 @@ To have CI sign release builds with your key, add repository secrets `WORKDECK_K
 app/src/main/java/com/workdeck/app/
   web/BrowserTab.java      one long-lived WebView per site: settings, navigation policy, popups,
                            WebRTC permission grants, downloads, renderer-crash recovery
-  web/TabManager.java      process-wide owner of the tabs (outlives activities)
+  web/TabManager.java      process-wide owner of every account's tabs (outlives activities)
+  Account.java / Accounts.java  the accounts, their per-account settings and WebView profiles
   web/UserAgents.java      desktop Chrome/Windows + Chrome-for-Android identities from the real engine version
-  web/WebViewSupport.java  document-start scripts + UA client hints via the WebView APK's support-library glue
+  web/WebViewSupport.java  document-start scripts, UA client hints and per-account WebView profiles
+                           (separate cookies/storage) via the WebView APK's support-library glue
   web/JsBridge.java        token-protected window.WorkDeckBridge used by the injected script
   web/SwShim.java          adds a notification shim to Microsoft service-worker scripts
   web/UrlRouter.java       which URLs are Teams / Outlook / Microsoft / external (pure Java, unit-tested)
   call/CallManager.java    call detection + speaker/earpiece/Bluetooth/wired routing, wake locks
   notify/Notifier.java     Android notifications, incoming-call alerts, downloads
   service/KeepAliveService foreground service (special-use + microphone/camera types), boot restart
-  ui/MainActivity.java     tabs, bottom bar, zoom bar, popups, PiP, full-screen video
+  ui/MainActivity.java     account drop-ups, bottom bar, zoom bar, popups, PiP, full-screen video
+  ui/AccountsActivity.java manage accounts (add, rename, colour, order, per-account settings, sign out, delete)
   ui/SetupActivity.java    first-run setup & permissions; ui/SettingsActivity.java settings
 app/src/main/assets/workdeck/
   inject.js                document-start script: Notification API, desktop identity, viewport/zoom,
-                           Badging API, blob downloads, mic tracking, call buttons
+                           Badging API, Outlook Inbox unread count, blob downloads, mic tracking, call buttons
   sw-shim.js               forwards service-worker notifications to the page
 ```
 

@@ -10,10 +10,10 @@ public final class UiState {
     /** True while MainActivity is started (visible, possibly in picture-in-picture). */
     public static volatile boolean activityVisible;
 
-    /** The site currently shown in MainActivity, or null. */
-    public static volatile Site visibleSite;
+    /** Key (account|site) of the tab currently shown in MainActivity, or null. */
+    public static volatile String visibleTab;
 
-    public static boolean isLookingAt(Site s) {
-        return activityResumed && visibleSite == s;
+    public static boolean isLookingAt(String tabKey) {
+        return activityResumed && tabKey != null && tabKey.equals(visibleTab);
     }
 }

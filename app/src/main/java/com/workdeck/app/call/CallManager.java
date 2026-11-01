@@ -15,10 +15,9 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import com.workdeck.app.Prefs;
-import com.workdeck.app.Site;
 
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +43,7 @@ public final class CallManager {
     private final AudioManager mAudio;
     private final PowerManager mPower;
     private final Handler mMain = new Handler(Looper.getMainLooper());
-    private final Map<Site, Integer> mPageMic = new EnumMap<>(Site.class);
+    private final Map<String, Integer> mPageMic = new HashMap<>();
     private final List<Listener> mListeners = new ArrayList<>();
 
     private boolean mInCall;
@@ -96,17 +95,18 @@ public final class CallManager {
         pollNow();
     }
 
-    public void onPageMicDelta(Site site, int delta) {
-        Integer cur = mPageMic.get(site);
+    /** A tab (account|site key) opened (+1) or closed (-1) a microphone track. */
+    public void onPageMicDelta(String tabKey, int delta) {
+        Integer cur = mPageMic.get(tabKey);
         int n = Math.max(0, (cur == null ? 0 : cur) + delta);
-        mPageMic.put(site, n);
+        mPageMic.put(tabKey, n);
         if (delta > 0) mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
         startPolling();
         pollNow();
     }
 
-    public void resetPageMic(Site site) {
-        mPageMic.put(site, 0);
+    public void resetPageMic(String tabKey) {
+        mPageMic.put(tabKey, 0);
         if (mInCall) pollNow();
     }
 
@@ -286,7 +286,7 @@ public final class CallManager {
 
     private void onDevicesChanged(boolean added) {
         // Let Teams refresh its device list (it re-reads enumerateDevices on 'devicechange').
-        for (com.workdeck.app.web.BrowserTab t : com.workdeck.app.web.TabManager.get(mApp).enabledTabs()) {
+        for (com.workdeck.app.web.BrowserTab t : com.workdeck.app.web.TabManager.get(mApp).allTabs()) {
             if (t.isCreated()) t.evaluate("window.__wdDevicesChanged && window.__wdDevicesChanged()");
         }
         if (!mInCall) return;

@@ -40,11 +40,14 @@ async function connect(wsUrl) {
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let id = 0;
   const pending = new Map();
+  const handlers = {};
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+    else if (m.method && handlers[m.method]) handlers[m.method](m.params || {});
   };
   return {
+    on(method, fn) { handlers[method] = fn; },
     send(method, params) {
       return new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params: params || {} })); });
     },
@@ -79,6 +82,27 @@ async function pageFor(pred) {
   const list = await pages();
   const p = list.find(pred);
   return p ? connect(p.webSocketDebuggerUrl) : null;
+}
+
+/** Bottom bar: tap an account, then pick Teams or Outlook in its drop-up. */
+async function openApp(account, app) {
+  ui(`tap "=${account}"`);
+  await sleep(1500);
+  if (!/tapped/.test(ui(`tap "=${app}"`))) ui(`tap "${app}"`);
+  await sleep(2500);
+}
+
+/** Every WebView page with a DevTools connection and the account marker set on it. */
+async function connectAll() {
+  const out = [];
+  for (const p of await pages()) {
+    try {
+      const c = await connect(p.webSocketDebuggerUrl);
+      const acct = await c.eval('window.__ciAcct || null', 8000);
+      out.push({ p, c, acct: acct && !acct.__error ? acct : null });
+    } catch (e) {}
+  }
+  return out;
 }
 
 (async () => {
@@ -249,8 +273,7 @@ async function pageFor(pred) {
   teams.close();
 
   // 6. Desktop/mobile switch on Outlook: mobile view uses the phone (Android) identity
-  ui('tap "Show Outlook"');
-  await sleep(2500);
+  await openApp('CRAFTWW', 'Outlook');
   ui('tap "Switch desktop / mobile view"');
   let o = null;
   for (let i = 0; i < 12; i++) {
@@ -271,7 +294,92 @@ async function pageFor(pred) {
   shot('06-outlook-mobile');
   ui('tap "Switch desktop / mobile view"');
   await sleep(3000);
-  ui('tap "Show Teams"');
+  await openApp('CRAFTWW', 'Teams');
+
+  // 7. Outlook: new mail raises the Inbox unread count -> Android notification.
+  // A stand-in Outlook inbox is served at a real Outlook address through DevTools
+  // (the CI has no Microsoft account), so WorkDeck's script runs on it like on Outlook.
+  sh('adb shell input keyevent KEYCODE_HOME');
+  await sleep(1500);
+  const ol = await pageFor(isOutlook);
+  if (!ol) {
+    check(false, 'Outlook page reachable for the new-mail test');
+  } else {
+    const FAKE = 'https://outlook.office.com/mail/wd-ci-inbox';
+    const html = `<!doctype html><html><head><title>Mail - CI - Outlook</title></head><body>
+      <div role="tree"><div role="treeitem" data-folder-name="inbox" title="Inbox"><span>Inbox</span><span id="count">2</span></div>
+      <div role="treeitem" title="Sent Items"><span>Sent Items</span></div></div>
+      <div role="listbox" id="mails"><div role="option" aria-label="Unread, Old Sender, Earlier mail, 9:00 AM"><div>Old Sender</div><div>Earlier mail</div></div></div>
+      </body></html>`;
+    const fe = await ol.send('Fetch.enable', { patterns: [{ urlPattern: FAKE + '*', requestStage: 'Request' }] });
+    ol.on('Fetch.requestPaused', (p) => ol.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }], body: Buffer.from(html).toString('base64') }));
+    if (fe.error) console.log('  NOTE: DevTools request interception unavailable: ' + JSON.stringify(fe.error));
+    await ol.send('Page.navigate', { url: FAKE });
+    await sleep(4000);
+    const st = await ol.eval(`({ url: location.href, injected: typeof window.__wdUnreadPreview, count: (document.getElementById('count') || {}).textContent })`, 10000);
+    check(st && st.url === FAKE && st.injected === 'function' && st.count === '2', 'stand-in Outlook inbox loaded with the WorkDeck script', st);
+    await sleep(24000); // past the "Outlook is still loading" window, in which counts are a baseline
+    await ol.eval(`(function () { var row = document.createElement('div'); row.setAttribute('role', 'option');
+      row.setAttribute('aria-label', 'Unread, CI Sender, Quarterly numbers, 10:01 AM, Here are the numbers');
+      row.innerHTML = '<div>CI Sender</div><div>Quarterly numbers</div><div>10:01 AM</div><div>Here are the numbers</div>';
+      var list = document.getElementById('mails'); list.insertBefore(row, list.firstChild);
+      document.getElementById('count').textContent = '3'; return 'ok'; })()`, 10000);
+    const mailShown = await waitFor(() => wdNotifs().some((r) => r.includes('3 unread in Outlook')), 15000);
+    check(mailShown, 'new Outlook mail (Inbox unread count up) posts an Android notification');
+    const rec = wdNotifs().find((r) => r.includes('3 unread in Outlook')) || '';
+    check(rec.includes('channel=outlook'), 'posted on the "Outlook mail" channel');
+    check(rec.includes('CI Sender'), 'notification names the sender of the newest mail');
+    if (!mailShown) diag('outlook new mail');
+    shot('07-outlook-mail');
+    await ol.eval(`document.getElementById('count').textContent = '', 'ok'`, 10000);
+    const mailGone = await waitFor(() => !wdNotifs().some((r) => r.includes('unread in Outlook')), 15000);
+    check(mailGone, 'Outlook notification goes away when the Inbox has no unread mail');
+    await ol.send('Fetch.disable');
+    ol.close();
+  }
+
+  // 8. Second account (OMC): its own WebView profile (separate sign-in) and notifications
+  const profiles = /multiProfile=true/.test(sh('adb logcat -d -s WorkDeck/WVSupport'));
+  console.log('  WebView multi-profile support: ' + profiles);
+  for (const x of await connectAll()) { await x.c.eval('window.__ciAcct = "CRAFTWW"', 8000); x.c.close(); }
+  sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
+  await sleep(2500);
+  await openApp('OMC', 'Teams');
+  await sleep(15000);
+  shot('08-omc');
+  const all = await connectAll();
+  const fresh = all.filter((x) => x.acct !== 'CRAFTWW');
+  console.log('  pages after opening OMC:\n' + all.map((x) => '    ' + (x.acct || 'new') + '  ' + safe(x.p.url).slice(0, 100)).join('\n'));
+  check(fresh.length >= 1, 'opening OMC creates its own WebView', fresh.length);
+  if (fresh.length && profiles) {
+    const omc = fresh.find((x) => isTeams(x.p)) || fresh[0];
+    const craft = (all.find((x) => x.acct === 'CRAFTWW' && isTeams(x.p)) || all.find((x) => x.acct === 'CRAFTWW'));
+    const LOGIN = 'https://login.microsoftonline.com/';
+    const hasCi = (r) => ((r && r.result && r.result.cookies) || []).some((c) => c.name === 'wdci');
+    await craft.c.send('Network.setCookie', { name: 'wdci', value: 'craftww', url: LOGIN, secure: true });
+    const inCraft = await craft.c.send('Network.getCookies', { urls: [LOGIN] });
+    const inOmc = await omc.c.send('Network.getCookies', { urls: [LOGIN] });
+    check(hasCi(inCraft), 'a sign-in cookie set in CRAFTWW is stored', (inCraft.result || inCraft.error || {}).cookies ? 'ok' : inCraft);
+    check(!hasCi(inOmc), 'OMC cannot see CRAFTWW cookies (separate sign-in per account)');
+    await craft.c.send('Network.deleteCookies', { name: 'wdci', url: LOGIN });
+    sh('adb shell input keyevent KEYCODE_HOME');
+    await sleep(2500);
+    await omc.c.eval(`new Notification('OMC CI message', { body: 'from the second account', tag: 'ci-omc' }), 'ok'`, 10000);
+    const omcShown = await waitFor(() => wdNotifs().some((r) => r.includes('OMC CI message')), 10000);
+    check(omcShown, 'OMC page notification shows as an Android notification');
+    const orec = wdNotifs().find((r) => r.includes('OMC CI message')) || '';
+    check(orec.includes('OMC \u00b7 Teams'), 'notification is labelled with its account ("OMC \u00b7 Teams")', (orec.match(/android\.subText=[^\n]*/) || [''])[0]);
+    if (!omcShown) diag('OMC notification');
+  } else if (fresh.length) {
+    const txt = await fresh[0].c.eval('document.body ? document.body.innerText : ""', 8000);
+    console.log('  NOTE: this emulator WebView cannot keep accounts apart (phones get it via a WebView update)');
+    check(/update Android System WebView/i.test(String(txt)), 'without profile support, OMC asks for a WebView update instead of mixing sign-ins', String(txt).slice(0, 120));
+  }
+  for (const x of all) x.c.close();
+  sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
+  await sleep(2500);
+  await openApp('CRAFTWW', 'Teams');
 
   console.log(failures ? `\n${failures} WebView check(s) FAILED` : '\nall WebView checks passed');
   process.exit(failures ? 1 : 0);

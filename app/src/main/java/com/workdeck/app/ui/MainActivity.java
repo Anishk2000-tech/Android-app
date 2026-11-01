@@ -9,6 +9,8 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
@@ -17,6 +19,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.util.Rational;
+import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -24,19 +27,23 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.workdeck.app.Account;
+import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
 import com.workdeck.app.Site;
@@ -57,20 +64,26 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** The single main screen: Teams/Outlook tabs, call controls, zoom and view mode. */
+/**
+ * The single main screen: one drop-up per account (each with its own Teams and
+ * Outlook), call controls, zoom and view mode.
+ */
 public final class MainActivity extends Activity implements TabHost, CallManager.Listener {
     public static final String ACTION_OPEN_SITE = "com.workdeck.app.OPEN_SITE";
     public static final String ACTION_INCOMING_CALL = "com.workdeck.app.INCOMING_CALL";
     public static final String ACTION_ANSWER_CALL = "com.workdeck.app.ANSWER_CALL";
     public static final String EXTRA_SITE = "site";
+    public static final String EXTRA_ACCOUNT = "account";
     public static final String EXTRA_NOTIFICATION_ID = "notification_id";
 
     private static final int REQ_FILE = 100;
 
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private Prefs mPrefs;
+    private Accounts mAccounts;
     private TabManager mTabs;
     private CallManager mCall;
+    private Account mAccount;
     private Site mSite;
 
     private View mContent;
@@ -90,10 +103,14 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private TextView mTextSize;
     private Button mDesktopWidth;
     private FrameLayout mFullscreen;
-    private final Map<Site, View> mTabButtons = new HashMap<>();
-    private final Map<Site, TextView> mBadges = new HashMap<>();
+    private HorizontalScrollView mChipScroll;
+    private LinearLayout mChips;
+    /** Account id -> its chip in the bottom bar. */
+    private final Map<String, View> mChipViews = new HashMap<>();
 
     private final List<WebView> mPopups = new ArrayList<>();
+    /** Popup -> key of the tab that opened it (a popup shows only over its own tab). */
+    private final Map<WebView, String> mPopupOwner = new HashMap<>();
     private View mCustomView;
     private WebChromeClient.CustomViewCallback mCustomCallback;
     private ValueCallback<Uri[]> mFileCallback;
@@ -101,7 +118,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private int mNextPermissionCode = 200;
     private boolean mInPip;
     private boolean mShownForCall;
-    private String mEnabledKey;
+    private String mAccountsSig;
     private int mNightMode;
 
     // ------------------------------------------------------------------ lifecycle
@@ -120,7 +137,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             return;
         }
         WorkDeckApp.setMainActivity(this);
-        mEnabledKey = enabledKey();
+        mAccounts = Accounts.get(this);
+        mAccountsSig = mAccounts.signature();
         mNightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         setContentView(R.layout.activity_main);
         bindViews();
@@ -129,26 +147,16 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         mTabs = TabManager.get(this);
         mCall = CallManager.get(this);
         mTabs.setHost(this);
-        mTabs.startAll();
-        for (BrowserTab t : mTabs.enabledTabs()) t.attach(mWebContainer);
+        mTabs.addGlobalListener(mTabListener);
+        mTabs.startBackground();
+        for (BrowserTab t : mTabs.allTabs()) t.attach(mWebContainer);
+        buildChips();
 
-        Site initial = Site.fromKey(mPrefs.lastSite());
-        if (initial == null || mTabs.tab(initial) == null) initial = firstEnabled();
-        showSite(initial);
+        Account initial = mAccounts.active();
+        showTab(initial, initial.preferredSite());
         mCall.addListener(this);
         onCallStateChanged(mCall.inCall(), mCall.route());
         handleIntent(getIntent());
-    }
-
-    private String enabledKey() {
-        StringBuilder sb = new StringBuilder();
-        for (Site s : Site.values()) sb.append(mPrefs.siteEnabled(s) ? '1' : '0');
-        return sb.toString();
-    }
-
-    private Site firstEnabled() {
-        for (Site s : Site.values()) if (mPrefs.siteEnabled(s)) return s;
-        return Site.TEAMS;
     }
 
     @Override
@@ -169,20 +177,19 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     protected void onResume() {
         super.onResume();
         if (mTabs == null) return;
-        if (!enabledKey().equals(mEnabledKey)) {
-            // Teams/Outlook was switched on or off in Setup: rebuild the screen.
+        if (!mAccounts.signature().equals(mAccountsSig) || mAccount == null || mAccounts.find(mAccount.id) == null) {
+            // Accounts were added, removed, renamed or had Teams/Outlook switched: rebuild.
             recreate();
             return;
         }
         UiState.activityResumed = true;
-        UiState.visibleSite = mSite;
+        UiState.visibleTab = currentKey();
         if (mPrefs.keepAlive() || mCall.inCall()) {
             KeepAliveService.start(this);
         } else {
             KeepAliveService.stop(this);
         }
-        if (mSite != null) Notifier.get(this).clearSite(mSite);
-        if (mSite == Site.TEAMS) Notifier.get(this).cancelCallAlert();
+        clearNotificationsOfCurrent();
         refreshUi();
     }
 
@@ -190,7 +197,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     protected void onPause() {
         UiState.activityResumed = false;
         android.util.Log.i("WorkDeck/Main", "paused");
-        CookieManager.getInstance().flush();
+        if (mTabs != null) mTabs.flushCookies();
         super.onPause();
     }
 
@@ -206,12 +213,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             mCall.removeListener(this);
             for (WebView p : new ArrayList<>(mPopups)) closePopup(p);
             hideCustomView();
-            for (BrowserTab t : mTabs.enabledTabs()) {
-                t.removeListener(mTabListener);
-                t.detach();
-            }
+            mTabs.removeGlobalListener(mTabListener);
+            for (BrowserTab t : mTabs.allTabs()) t.detach();
             mTabs.setHost(null);
-            UiState.visibleSite = null;
+            UiState.visibleTab = null;
         }
         WorkDeckApp.setMainActivity(null);
         super.onDestroy();
@@ -260,26 +265,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         mTextSize = findViewById(R.id.text_size);
         mDesktopWidth = findViewById(R.id.desktop_width);
         mFullscreen = findViewById(R.id.fullscreen_container);
-        mTabButtons.put(Site.TEAMS, findViewById(R.id.tab_teams));
-        mTabButtons.put(Site.OUTLOOK, findViewById(R.id.tab_outlook));
-        mBadges.put(Site.TEAMS, (TextView) findViewById(R.id.badge_teams));
-        mBadges.put(Site.OUTLOOK, (TextView) findViewById(R.id.badge_outlook));
-
-        for (final Site s : Site.values()) {
-            View b = mTabButtons.get(s);
-            b.setVisibility(mPrefs.siteEnabled(s) ? View.VISIBLE : View.GONE);
-            b.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (mSite == s) {
-                        // Tapping the active tab again closes overlays.
-                        if (!mPopups.isEmpty()) closePopup(mPopups.get(mPopups.size() - 1));
-                    } else {
-                        showSite(s);
-                    }
-                }
-            });
-        }
+        mChipScroll = findViewById(R.id.account_scroll);
+        mChips = findViewById(R.id.account_chips);
         mBtnView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -330,14 +317,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         findViewById(R.id.popup_close).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (!mPopups.isEmpty()) closePopup(mPopups.get(mPopups.size() - 1));
+                WebView top = currentPopup();
+                if (top != null) closePopup(top);
             }
         });
         findViewById(R.id.popup_external).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mPopups.isEmpty()) return;
-                WebView top = mPopups.get(mPopups.size() - 1);
+                WebView top = currentPopup();
+                if (top == null) return;
                 String url = top.getUrl();
                 BrowserTab t = currentTab();
                 if (url != null && t != null) t.openExternal(url);
@@ -430,23 +418,56 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     }
 
     private BrowserTab currentTab() {
-        return mSite == null || mTabs == null ? null : mTabs.tab(mSite);
+        return mAccount == null || mSite == null || mTabs == null ? null : mTabs.tab(mAccount, mSite);
     }
 
-    private void showSite(Site s) {
-        BrowserTab tab = mTabs.tab(s);
+    private String currentKey() {
+        return mAccount == null || mSite == null ? null : mAccount.key(mSite);
+    }
+
+    private void clearNotificationsOfCurrent() {
+        String key = currentKey();
+        if (key == null) return;
+        Notifier n = Notifier.get(this);
+        n.clearTab(key);
+        if (key.equals(n.callAlertTab())) n.cancelCallAlert();
+    }
+
+    /** Shows an account's Teams or Outlook (the other one if that app is switched off). */
+    private void showTab(Account a, Site s) {
+        if (a == null) return;
+        if (s == null || !a.siteEnabled(s)) s = a.preferredSite();
+        BrowserTab tab = mTabs.tab(a, s);
         if (tab == null) return;
         tab.ensureStarted();
         tab.attach(mWebContainer);
+        boolean firstOpen = true;
+        for (Site o : Site.values()) if (a.wasOpened(o)) firstOpen = false;
+        mAccount = a;
         mSite = s;
-        mPrefs.setLastSite(s);
-        UiState.visibleSite = s;
-        for (BrowserTab t : mTabs.enabledTabs()) {
-            t.addListener(mTabListener);
-            if (t.webView() != null) t.webView().setVisibility(t.site == s ? View.VISIBLE : View.GONE);
+        a.lastSite = s;
+        a.markOpened(s);
+        if (firstOpen) {
+            // First time this account is used: also start its other app shortly, so its
+            // Outlook (or Teams) notifications work without opening it first.
+            for (Site o : Site.values()) if (a.siteEnabled(o)) a.markOpened(o);
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (mTabs != null) mTabs.startBackground();
+                }
+            }, 4000);
         }
-        if (UiState.activityResumed) Notifier.get(this).clearSite(s);
+        mAccounts.setActive(a);
+        mAccounts.save();
+        UiState.visibleTab = tab.key;
+        for (BrowserTab t : mTabs.allTabs()) {
+            if (t.webView() != null) t.webView().setVisibility(t == tab ? View.VISIBLE : View.GONE);
+        }
+        if (UiState.activityResumed) clearNotificationsOfCurrent();
+        updatePopupPanel();
         refreshUi();
+        scrollChipIntoView(a);
     }
 
     private final BrowserTab.Listener mTabListener = new BrowserTab.Listener() {
@@ -456,23 +477,159 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
     };
 
-    private void refreshUi() {
-        if (mTabs == null) return;
-        BrowserTab cur = currentTab();
-        // Re-assert which WebView is shown (a tab rebuilt after a renderer crash starts visible).
-        for (BrowserTab t : mTabs.enabledTabs()) {
-            WebView w = t.webView();
-            if (w == null) continue;
-            int want = t.site == mSite ? View.VISIBLE : View.GONE;
-            if (w.getVisibility() != want) w.setVisibility(want);
-            if (w.getParent() == null) t.attach(mWebContainer);
+    // ------------------------------------------------------------------ account chips (drop-ups)
+
+    private void buildChips() {
+        mChips.removeAllViews();
+        mChipViews.clear();
+        LayoutInflater inf = getLayoutInflater();
+        for (final Account a : mAccounts.list()) {
+            View chip = inf.inflate(R.layout.account_chip, mChips, false);
+            ((TextView) chip.findViewById(R.id.chip_name)).setText(a.name);
+            GradientDrawable dot = new GradientDrawable();
+            dot.setShape(GradientDrawable.OVAL);
+            dot.setColor(AccountDialogs.accent(this, a));
+            chip.findViewById(R.id.chip_dot).setBackground(dot);
+            chip.setContentDescription(getString(R.string.desc_account_chip, a.name));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showAccountMenu(a, v);
+                }
+            });
+            chip.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    // Quick switch: straight to the app this account used last.
+                    showTab(a, a.preferredSite());
+                    return true;
+                }
+            });
+            mChips.addView(chip);
+            mChipViews.put(a.id, chip);
         }
+        TextView add = new TextView(this);
+        add.setText("+");
+        add.setTextSize(20);
+        add.setTextColor(getColor(R.color.wd_icon));
+        add.setGravity(android.view.Gravity.CENTER);
+        add.setContentDescription(getString(R.string.desc_add_account));
+        add.setBackgroundResource(R.drawable.tab_bg);
+        add.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                addAccount();
+            }
+        });
+        mChips.addView(add, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 40)));
+    }
+
+    private void addAccount() {
+        AccountDialogs.showAdd(this, new AccountDialogs.Added() {
+            @Override
+            public void onAdded(Account a) {
+                mAccountsSig = mAccounts.signature();
+                buildChips();
+                showTab(a, Site.TEAMS);
+                Toast.makeText(MainActivity.this, getString(R.string.acc_added, a.name), Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private Drawable siteIcon(Site s, int tint) {
+        Drawable d = getDrawable(s == Site.TEAMS ? R.drawable.ic_tab_teams : R.drawable.ic_tab_outlook).mutate();
+        d.setTint(tint);
+        return d;
+    }
+
+    private int unread(Account a, Site s) {
+        BrowserTab t = mTabs.existing(a.key(s));
+        return t == null ? 0 : Math.max(0, t.unreadCount());
+    }
+
+    /** The drop-up of an account: its Teams and Outlook (with unread counts) and its settings. */
+    private void showAccountMenu(final Account a, View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        Menu m = pm.getMenu();
+        int accent = AccountDialogs.accent(this, a);
         for (Site s : Site.values()) {
-            View b = mTabButtons.get(s);
-            b.setSelected(s == mSite);
-            BrowserTab t = mTabs.existing(s);
-            int n = t == null ? 0 : t.unreadCount();
-            TextView badge = mBadges.get(s);
+            if (!a.siteEnabled(s)) continue;
+            int n = unread(a, s);
+            String title = getString(s.titleRes) + (n > 0 ? "  (" + (n > 99 ? "99+" : n) + ")" : "");
+            m.add(0, 10 + s.ordinal(), s.ordinal(), title).setIcon(siteIcon(s, accent));
+        }
+        m.setGroupCheckable(0, true, true);
+        MenuItem current = a == mAccount && mSite != null ? m.findItem(10 + mSite.ordinal()) : null;
+        if (current != null) current.setChecked(true);
+        m.add(1, 1, 10, getString(R.string.menu_account_settings, a.name));
+        if (Build.VERSION.SDK_INT >= 29) pm.setForceShowIcon(true);
+        pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
+            @Override
+            public boolean onMenuItemClick(MenuItem item) {
+                int id = item.getItemId();
+                if (id == 1) {
+                    startActivity(new Intent(MainActivity.this, AccountsActivity.class)
+                            .putExtra(AccountsActivity.EXTRA_ACCOUNT, a.id));
+                    return true;
+                }
+                for (Site s : Site.values()) {
+                    if (id == 10 + s.ordinal()) {
+                        if (a == mAccount && s == mSite) {
+                            // Picking the open app again closes any window on top of it.
+                            WebView top = currentPopup();
+                            if (top != null) closePopup(top);
+                        } else {
+                            showTab(a, s);
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
+        pm.show();
+    }
+
+    private void scrollChipIntoView(Account a) {
+        final View chip = mChipViews.get(a.id);
+        if (chip == null || mChipScroll == null) return;
+        mChipScroll.post(new Runnable() {
+            @Override
+            public void run() {
+                int x = mChipScroll.getScrollX();
+                int w = mChipScroll.getWidth();
+                if (chip.getLeft() < x) mChipScroll.smoothScrollTo(chip.getLeft(), 0);
+                else if (chip.getRight() > x + w) mChipScroll.smoothScrollTo(chip.getRight() - w, 0);
+            }
+        });
+    }
+
+    private void refreshChips() {
+        boolean night = AccountDialogs.isNight(this);
+        for (Account a : mAccounts.list()) {
+            View chip = mChipViews.get(a.id);
+            if (chip == null) continue;
+            boolean active = mAccount != null && a.id.equals(mAccount.id);
+            int accent = AccountDialogs.accent(this, a);
+            chip.setSelected(active);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(Ui.dp(this, 18));
+            bg.setColor(active ? (accent & 0x00FFFFFF) | (night ? 0x33000000 : 0x24000000) : 0);
+            chip.setBackground(bg);
+            TextView name = chip.findViewById(R.id.chip_name);
+            name.setTextColor(active ? accent : getColor(R.color.wd_text2));
+            ImageView icon = chip.findViewById(R.id.chip_icon);
+            View dot = chip.findViewById(R.id.chip_dot);
+            if (active && mSite != null) {
+                icon.setImageDrawable(siteIcon(mSite, accent));
+                icon.setVisibility(View.VISIBLE);
+                dot.setVisibility(View.GONE);
+            } else {
+                icon.setVisibility(View.GONE);
+                dot.setVisibility(View.VISIBLE);
+            }
+            int n = mTabs.unreadOf(a);
+            TextView badge = chip.findViewById(R.id.chip_badge);
             if (n > 0) {
                 badge.setText(n > 99 ? "99+" : String.valueOf(n));
                 badge.setVisibility(View.VISIBLE);
@@ -480,9 +637,24 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 badge.setVisibility(View.GONE);
             }
         }
+    }
+
+    private void refreshUi() {
+        if (mTabs == null) return;
+        BrowserTab cur = currentTab();
+        // Re-assert which WebView is shown (a tab rebuilt after a renderer crash starts visible).
+        for (BrowserTab t : mTabs.allTabs()) {
+            WebView w = t.webView();
+            if (w == null) continue;
+            int want = t == cur ? View.VISIBLE : View.GONE;
+            if (w.getVisibility() != want) w.setVisibility(want);
+            if (w.getParent() == null) t.attach(mWebContainer);
+        }
+        refreshChips();
+        boolean popupShown = mPopupPanel.getVisibility() == View.VISIBLE;
         if (cur != null) {
             int p = cur.progress();
-            mProgress.setVisibility(p < 100 && mPopups.isEmpty() ? View.VISIBLE : View.GONE);
+            mProgress.setVisibility(p < 100 && !popupShown ? View.VISIBLE : View.GONE);
             mProgress.setProgress(p);
             String err = cur.error();
             mErrorPanel.setVisibility(err != null ? View.VISIBLE : View.GONE);
@@ -519,6 +691,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         m.add(0, 3, 0, t != null && t.isDesktop() ? R.string.menu_switch_mobile : R.string.menu_switch_desktop);
         m.add(0, 4, 0, R.string.menu_hide_bar);
         m.add(0, 5, 0, R.string.menu_open_browser);
+        m.add(0, 9, 0, R.string.menu_accounts);
+        m.add(0, 10, 0, R.string.menu_add_account);
         m.add(0, 6, 0, R.string.menu_setup);
         m.add(0, 7, 0, R.string.menu_settings);
         m.add(0, 8, 0, R.string.menu_quit);
@@ -553,6 +727,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                     case 8:
                         WorkDeckApp.quit(MainActivity.this);
                         return true;
+                    case 9:
+                        startActivity(new Intent(MainActivity.this, AccountsActivity.class));
+                        return true;
+                    case 10:
+                        addAccount();
+                        return true;
                     default:
                         return false;
                 }
@@ -567,10 +747,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (intent == null) return;
         String action = intent.getAction();
         Site site = Site.fromKey(intent.getStringExtra(EXTRA_SITE));
+        Account account = mAccounts.find(intent.getStringExtra(EXTRA_ACCOUNT));
+        if (account == null) account = mAccount != null ? mAccount : mAccounts.active();
         final String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
         if (ACTION_OPEN_SITE.equals(action) && site != null) {
-            showSite(site);
-            final BrowserTab t = mTabs.tab(site);
+            showTab(account, site);
+            final BrowserTab t = mTabs.tab(account, site);
             if (t != null && notificationId != null && !notificationId.isEmpty()) {
                 mMain.postDelayed(new Runnable() {
                     @Override
@@ -582,12 +764,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             }
         } else if (ACTION_INCOMING_CALL.equals(action)) {
             showOverLockScreen(true);
-            showSite(Site.TEAMS);
+            showTab(account, Site.TEAMS);
         } else if (ACTION_ANSWER_CALL.equals(action)) {
             showOverLockScreen(true);
             Notifier.get(this).cancelCallAlert();
-            showSite(Site.TEAMS);
-            final BrowserTab t = mTabs.tab(Site.TEAMS);
+            showTab(account, Site.TEAMS);
+            final BrowserTab t = mTabs.tab(account, Site.TEAMS);
             if (t != null) {
                 mMain.postDelayed(new Runnable() {
                     @Override
@@ -612,18 +794,26 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         intent.setAction(Intent.ACTION_MAIN);
     }
 
-    /** A Teams/Outlook/mailto link opened from another app. */
+    /** A Teams/Outlook/mailto link opened from another app: opens in the account on screen. */
     private void openExternalLink(String url) {
+        Account a = mAccount != null ? mAccount : mAccounts.active();
         if (url.startsWith("msteams:")) url = UrlRouter.msteamsToHttps(url);
         if (url.startsWith("mailto:")) {
-            if (mTabs.tab(Site.OUTLOOK) != null) {
-                switchToSite(Site.OUTLOOK, UrlRouter.mailtoToOutlook(url, mPrefs.homeUrl(Site.OUTLOOK)));
+            if (a.siteEnabled(Site.OUTLOOK)) {
+                openIn(a, Site.OUTLOOK, UrlRouter.mailtoToOutlook(url, a.homeUrl(Site.OUTLOOK)));
             }
             return;
         }
         Site target = UrlRouter.siteFor(url);
         if (target == null) target = mSite;
-        if (target != null && mTabs.tab(target) != null && UrlRouter.isHttp(url)) switchToSite(target, url);
+        if (target != null && a.siteEnabled(target) && UrlRouter.isHttp(url)) openIn(a, target, url);
+    }
+
+    private void openIn(Account a, Site site, String url) {
+        BrowserTab t = mTabs.tab(a, site);
+        if (t == null) return;
+        showTab(a, site);
+        if (url != null) t.loadUrl(url);
     }
 
     private void showOverLockScreen(boolean show) {
@@ -746,8 +936,9 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             hideCustomView();
             return;
         }
-        if (!mPopups.isEmpty()) {
-            WebView top = mPopups.get(mPopups.size() - 1);
+        WebView topPopup = currentPopup();
+        if (topPopup != null) {
+            WebView top = topPopup;
             if (top.canGoBack()) top.goBack();
             else closePopup(top);
             return;
@@ -875,9 +1066,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
 
     @Override
     public boolean openPopup(BrowserTab opener, Message resultMsg, boolean userGesture) {
-        if (mPopups.size() >= 4) return false;
+        if (mPopups.size() >= 6) return false;
         final WebView popup = opener.createPopupWebView(this);
         mPopups.add(popup);
+        mPopupOwner.put(popup, opener.key);
         popup.setVisibility(View.INVISIBLE);
         mPopupContainer.addView(popup);
         WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
@@ -897,25 +1089,50 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         return true;
     }
 
+    /** The top popup window of the tab on screen, or null. INVISIBLE = not shown yet. */
+    private WebView currentPopup() {
+        String key = currentKey();
+        for (int i = mPopups.size() - 1; i >= 0; i--) {
+            WebView p = mPopups.get(i);
+            if (p.getVisibility() != View.INVISIBLE && key != null && key.equals(mPopupOwner.get(p))) return p;
+        }
+        return null;
+    }
+
+    /** Shows the popup panel only over the tab that opened the popup. */
+    private void updatePopupPanel() {
+        WebView top = currentPopup();
+        for (WebView p : mPopups) {
+            if (p.getVisibility() != View.INVISIBLE) p.setVisibility(p == top ? View.VISIBLE : View.GONE);
+        }
+        if (top == null) {
+            mPopupPanel.setVisibility(View.GONE);
+        } else {
+            String title = top.getTitle();
+            if (title == null || title.isEmpty()) title = UrlRouter.host(top.getUrl() == null ? "" : top.getUrl());
+            mPopupTitle.setText(title);
+            mPopupPanel.setVisibility(View.VISIBLE);
+        }
+    }
+
     @Override
     public void showPopup(WebView popup) {
         if (!mPopups.contains(popup)) return;
-        for (WebView p : mPopups) p.setVisibility(p == popup ? View.VISIBLE : View.GONE);
+        popup.setVisibility(View.GONE); // decided: it is shown (on top when its tab is on screen)
         mPopupTitle.setText(UrlRouter.host(popup.getUrl() == null ? "" : popup.getUrl()));
-        mPopupPanel.setVisibility(View.VISIBLE);
+        updatePopupPanel();
         refreshUi();
     }
 
     @Override
     public void onPopupTitle(WebView popup, String title) {
-        if (!mPopups.isEmpty() && mPopups.get(mPopups.size() - 1) == popup && title != null) {
-            mPopupTitle.setText(title);
-        }
+        if (popup == currentPopup() && title != null) mPopupTitle.setText(title);
     }
 
     @Override
     public void closePopup(final WebView popup) {
         if (!mPopups.remove(popup)) return;
+        mPopupOwner.remove(popup);
         mPopupContainer.removeView(popup);
         mMain.post(new Runnable() {
             @Override
@@ -926,33 +1143,13 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 }
             }
         });
-        WebView top = null;
-        for (int i = mPopups.size() - 1; i >= 0; i--) {
-            if (mPopups.get(i).getVisibility() != View.INVISIBLE) {
-                top = mPopups.get(i);
-                break;
-            }
-        }
-        if (top == null) {
-            mPopupPanel.setVisibility(View.GONE);
-        } else {
-            top.setVisibility(View.VISIBLE);
-            mPopupTitle.setText(top.getTitle());
-        }
+        updatePopupPanel();
         refreshUi();
     }
 
     @Override
-    public void switchToSite(Site site, String url) {
-        BrowserTab t = mTabs.tab(site);
-        if (t == null) return;
-        showSite(site);
-        if (url != null) t.loadUrl(url);
-    }
-
-    @Override
-    public boolean isSiteVisible(Site site) {
-        return UiState.activityResumed && mSite == site;
+    public void switchToSite(BrowserTab from, Site site, String url) {
+        openIn(from.account, site, url);
     }
 
     private static boolean sOutdatedShown;
@@ -981,14 +1178,6 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     }
 
     private void openStore(String pkg) {
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + pkg)));
-        } catch (ActivityNotFoundException e) {
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW,
-                        Uri.parse("https://play.google.com/store/apps/details?id=" + pkg)));
-            } catch (ActivityNotFoundException ignored) {
-            }
-        }
+        AccountDialogs.openStore(this, pkg);
     }
 }

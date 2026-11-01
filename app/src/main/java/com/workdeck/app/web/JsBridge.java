@@ -47,7 +47,7 @@ final class JsBridge {
     }
 
     static String notificationPermission(Context c, BrowserTab tab) {
-        if (!Prefs.get(c).notificationsEnabled(tab.site)) return "denied";
+        if (!tab.account.notificationsEnabled(tab.site)) return "denied";
         if (Build.VERSION.SDK_INT >= 33
                 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return "default";
@@ -75,7 +75,7 @@ final class JsBridge {
             mMain.post(new Runnable() {
                 @Override
                 public void run() {
-                    Notifier.get(mApp).showWebNotification(mTab.site,
+                    Notifier.get(mApp).showWebNotification(mTab,
                             o.optString("id"), o.optString("title"), o.optString("body"),
                             o.optString("tag"), o.optString("icon"), o.optBoolean("requireInteraction"),
                             o.optBoolean("silent"), o.optBoolean("renotify"));
@@ -92,7 +92,7 @@ final class JsBridge {
         mMain.post(new Runnable() {
             @Override
             public void run() {
-                Notifier.get(mApp).closeWebNotification(mTab.site, id);
+                Notifier.get(mApp).closeWebNotification(mTab, id);
             }
         });
     }
@@ -105,6 +105,20 @@ final class JsBridge {
             @Override
             public void run() {
                 mTab.setBadgeCount(n);
+            }
+        });
+    }
+
+    /** Outlook's Inbox unread count read from the page; {@code baseline} = not news yet. */
+    @JavascriptInterface
+    public void mailUnread(String token, String count, final String baseline) {
+        if (!ok(token)) return;
+        final int n = parseInt(count, -1);
+        if (n < 0) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                mTab.setScrapedUnread(n, "1".equals(baseline));
             }
         });
     }
@@ -134,7 +148,7 @@ final class JsBridge {
         mMain.post(new Runnable() {
             @Override
             public void run() {
-                CallManager.get(mApp).onPageMicDelta(mTab.site, d);
+                CallManager.get(mApp).onPageMicDelta(mTab.key, d);
             }
         });
     }
@@ -145,9 +159,9 @@ final class JsBridge {
         mMain.post(new Runnable() {
             @Override
             public void run() {
-                if ("ringing".equals(type)) Notifier.get(mApp).onRingtoneHeard(mTab.site);
-                else if ("ringing_ui".equals(type)) Notifier.get(mApp).onCallScreen(mTab.site, true, detail);
-                else if ("ringing_end".equals(type)) Notifier.get(mApp).onCallScreen(mTab.site, false, detail);
+                if ("ringing".equals(type)) Notifier.get(mApp).onRingtoneHeard(mTab);
+                else if ("ringing_ui".equals(type)) Notifier.get(mApp).onCallScreen(mTab, true, detail);
+                else if ("ringing_end".equals(type)) Notifier.get(mApp).onCallScreen(mTab, false, detail);
                 else if ("unsupported_browser".equals(type)) mTab.onBrowserUnsupported();
             }
         });
@@ -157,7 +171,7 @@ final class JsBridge {
     @JavascriptInterface
     public String looking(String token) {
         if (!ok(token)) return "0";
-        return com.workdeck.app.UiState.isLookingAt(mTab.site) ? "1" : "0";
+        return com.workdeck.app.UiState.isLookingAt(mTab.key) ? "1" : "0";
     }
 
     /** Real Android microphone/camera permission, cameras and audio routes (JSON). */
@@ -186,7 +200,7 @@ final class JsBridge {
     @JavascriptInterface
     public void log(String token, String msg) {
         if (!ok(token)) return;
-        Log.d(TAG, mTab.site.key + ": " + msg);
+        Log.d(TAG, mTab.key + ": " + msg);
     }
 
     private static int parseInt(String s, int def) {

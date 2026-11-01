@@ -16,11 +16,11 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
-import android.webkit.CookieManager;
 
+import com.workdeck.app.Account;
+import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
-import com.workdeck.app.Site;
 import com.workdeck.app.UiState;
 import com.workdeck.app.call.CallManager;
 import com.workdeck.app.notify.ActionReceiver;
@@ -97,8 +97,8 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
             return START_NOT_STICKY;
         }
         TabManager tabs = TabManager.get(this);
-        tabs.startAll();
-        for (BrowserTab t : tabs.enabledTabs()) t.addListener(this);
+        tabs.addGlobalListener(this);
+        tabs.startBackground();
         applyWakeLock();
         return START_STICKY;
     }
@@ -107,7 +107,7 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
     public void onTaskRemoved(Intent rootIntent) {
         // Swiped away from Recents: keep running so notifications continue.
         Log.i(TAG, "task removed; staying alive");
-        CookieManager.getInstance().flush();
+        TabManager.get(this).flushCookies();
     }
 
     @Override
@@ -115,7 +115,7 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
         sInstance = null;
         mMain.removeCallbacksAndMessages(null);
         CallManager.get(this).removeListener(this);
-        for (BrowserTab t : TabManager.get(this).enabledTabs()) t.removeListener(this);
+        TabManager.get(this).removeGlobalListener(this);
         if (mNetCallback != null) {
             try {
                 ((ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE)).unregisterNetworkCallback(mNetCallback);
@@ -123,7 +123,7 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
             }
         }
         releaseWakeLock();
-        CookieManager.getInstance().flush();
+        TabManager.get(this).flushCookies();
         super.onDestroy();
     }
 
@@ -276,14 +276,27 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
     }
 
     private String statusText() {
+        TabManager tabs = TabManager.get(this);
+        boolean multiple = Accounts.get(this).multiple();
         StringBuilder sb = new StringBuilder();
-        for (BrowserTab t : TabManager.get(this).enabledTabs()) {
+        int running = 0;
+        for (Account a : Accounts.get(this).list()) {
+            StringBuilder part = new StringBuilder();
+            for (BrowserTab t : tabs.tabsOf(a)) {
+                if (!t.isCreated()) continue;
+                running++;
+                int n = t.unreadCount();
+                if (n <= 0) continue;
+                if (part.length() > 0) part.append(", ");
+                part.append(getString(t.site.titleRes)).append(' ').append(n);
+            }
+            if (part.length() == 0) continue;
             if (sb.length() > 0) sb.append("  ·  ");
-            sb.append(getString(t.site.titleRes));
-            int n = t.unreadCount();
-            if (n > 0) sb.append(" (").append(n).append(')');
+            if (multiple) sb.append(a.name).append(": ");
+            sb.append(part);
         }
-        if (sb.length() == 0) return getString(R.string.service_text_idle);
+        if (running == 0) return getString(R.string.service_text_idle);
+        if (sb.length() == 0) return getString(R.string.service_text_quiet);
         return getString(R.string.service_text, sb.toString());
     }
 
@@ -345,13 +358,10 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
         @Override
         public void run() {
             TabManager tabs = TabManager.get(KeepAliveService.this);
-            for (Site s : Site.values()) {
-                BrowserTab t = tabs.tab(s);
-                if (t != null && !t.isCreated()) t.ensureStarted();
-            }
+            tabs.startBackground();
             tabs.retryFailed();
             tabs.autoRefreshIfStale(UiState.activityVisible);
-            CookieManager.getInstance().flush();
+            tabs.flushCookies();
             mMain.postDelayed(this, WATCHDOG_MS);
         }
     };

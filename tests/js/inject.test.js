@@ -38,6 +38,7 @@ const BRIDGE_MOCK = `
     notify(t, json) { this._rec('notify', arguments); },
     closeNotification(t, id) { this._rec('closeNotification', arguments); },
     badge(t, n) { this._rec('badge', arguments); },
+    mailUnread(t, n, baseline) { this._rec('mailUnread', arguments); },
     fileStart(t, name, mime, size) { this._rec('fileStart', arguments); window.__files.f1 = { name: name, mime: mime, chunks: [] }; return 'f1'; },
     fileChunk(t, id, b64) { window.__files[id].chunks.push(b64); },
     fileEnd(t, id, status) { this._rec('fileEnd', arguments); },
@@ -63,6 +64,17 @@ const PAGES = {
   '/teams.html': `<!doctype html><html><head><title>Chat | Teams</title></head><body>
       <div role="tree"><div role="treeitem" aria-label="Alice Smith, Hey are you free for a call?, 10:42, Unread">Alice</div></div>
       </body></html>`,
+  '/outlook.html': `<!doctype html><html><head><title>Mail - Test User - Outlook</title></head><body>
+      <div role="tree" id="folders">
+        <div role="treeitem" title="Favorites">Favorites</div>
+        <div role="treeitem" data-folder-name="inbox" title="Inbox"><span>Inbox</span><span id="count">3</span></div>
+        <div role="treeitem" title="Sent Items"><span>Sent Items</span></div>
+      </div>
+      <div role="listbox">
+        <div role="option" aria-label="Unread, Carol White, Budget approval, 9:15 AM, Please approve the Q3 budget">
+          <div>Carol White</div><div>Budget approval</div><div>9:15 AM</div><div>Please approve the Q3 budget</div></div>
+        <div role="option" aria-label="Dan Brown, Lunch?, Yesterday"><div>Dan Brown</div><div>Lunch?</div></div>
+      </div></body></html>`,
   '/sw.html': `<!doctype html><html><head><title>sw</title></head><body>sw page</body></html>`,
   '/sw.js': `${SHIM}\nself.addEventListener('install', e => self.skipWaiting());
       self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
@@ -571,11 +583,80 @@ test('unread preview reads sender and message from the chat list', async (b, bas
   await ctx.close();
 });
 
+test('Outlook: Inbox unread count is reported (first reading = baseline), list fallback, preview', async (b, base) => {
+  const host = base.replace('127.0.0.1', 'outlook.wd-test');
+  const { ctx, page, errors } = await newPage(b, host, { site: 'outlook' }, '/outlook.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const mail = () => window.__calls.filter((c) => c.name === 'mailUnread').map((c) => c.args[1] + '/' + c.args[2]);
+    await wait(1900); // readings are throttled to one per 1.5 s while the page loads
+    const first = mail();
+    // Pretend Outlook finished loading a while ago: later changes are real news.
+    const real = Date.now.bind(Date);
+    let skew = 60000;
+    Date.now = () => real() + skew;
+    document.getElementById('count').textContent = '4';
+    await wait(150);
+    const more = mail();
+    skew += 5000;
+    document.getElementById('count').firstChild.data = '4'; // same number: nothing new
+    await wait(150);
+    const same = mail();
+    skew += 5000;
+    document.getElementById('count').textContent = '';
+    await wait(150);
+    const read = mail();
+    skew += 5000;
+    document.getElementById('folders').remove(); // folder pane closed: count unread rows
+    await wait(150);
+    const list = mail();
+    skew += 30000;
+    const tree = document.createElement('div');
+    tree.setAttribute('role', 'tree');
+    tree.innerHTML = '<div role="treeitem" aria-label="Inbox, 12 unread">Inbox12</div>';
+    document.body.insertBefore(tree, document.body.firstChild);
+    await wait(150);
+    const labelled = mail();
+    return { first, more, same, read, list, labelled, preview: window.__wdUnreadPreview() };
+  });
+  assert.deepStrictEqual(r.first, ['3/1'], 'first count is a baseline, not new mail');
+  assert.deepStrictEqual(r.more, ['3/1', '4/0'], 'new mail raises the count');
+  assert.strictEqual(r.same.length, 2, 'unchanged count is not reported again');
+  assert.deepStrictEqual(r.read.slice(2), ['0/0'], 'reading the mail clears the count');
+  assert.deepStrictEqual(r.list.slice(3), ['1/1'], 'list fallback starts a new baseline');
+  assert.deepStrictEqual(r.labelled.slice(4), ['12/1'], 'aria-label "N unread" form is understood');
+  assert.deepStrictEqual(r.preview, { title: 'Carol White', body: 'Budget approval - Please approve the Q3 budget' });
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('Outlook unread scraper stays off in Teams and when the page badges itself', async (b, base) => {
+  const host = base.replace('127.0.0.1', 'outlook.wd-test');
+  const t = await newPage(b, base, { site: 'teams' }, '/outlook.html');
+  const teams = await t.page.evaluate(async () => {
+    await new Promise((res) => setTimeout(res, 1900));
+    return window.__calls.filter((c) => c.name === 'mailUnread').length;
+  });
+  await t.ctx.close();
+  assert.strictEqual(teams, 0);
+  const o = await newPage(b, host, { site: 'outlook' }, '/outlook.html');
+  const badged = await o.page.evaluate(async () => {
+    await new Promise((res) => setTimeout(res, 1900));
+    navigator.setAppBadge(7);
+    Date.now = ((real) => () => real() + 60000)(Date.now.bind(Date));
+    document.getElementById('count').textContent = '9';
+    await new Promise((res) => setTimeout(res, 150));
+    return window.__calls.filter((c) => c.name === 'mailUnread' || c.name === 'badge').map((c) => c.name + ':' + c.args[1]);
+  });
+  await o.ctx.close();
+  assert.deepStrictEqual(badged, ['mailUnread:3', 'badge:7']);
+});
+
 (async () => {
   const srv = await startServer();
   const base = 'http://127.0.0.1:' + srv.address().port;
   const browser = await chromium.launch({
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+    args: ['--host-resolver-rules=MAP outlook.wd-test 127.0.0.1', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   let failed = 0;
   for (const t of tests) {

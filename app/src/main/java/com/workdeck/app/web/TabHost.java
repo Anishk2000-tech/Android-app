@@ -33,9 +33,8 @@ public interface TabHost {
 
     void closePopup(WebView popup);
 
-    void switchToSite(Site site, String url);
-
-    boolean isSiteVisible(Site site);
+    /** Show another site of the same account as {@code from} (e.g. a Teams link in Outlook). */
+    void switchToSite(BrowserTab from, Site site, String url);
 
     /** A site reported that the WebView engine is too old. */
     void onBrowserOutdated(String chromeMajor);

@@ -26,6 +26,7 @@ import com.workdeck.app.R;
 import com.workdeck.app.Site;
 import com.workdeck.app.UiState;
 import com.workdeck.app.ui.MainActivity;
+import com.workdeck.app.web.BrowserTab;
 import com.workdeck.app.web.UrlRouter;
 import com.workdeck.app.web.UserAgents;
 
@@ -33,7 +34,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -59,14 +59,16 @@ public final class Notifier {
     private final NotificationManager mNm;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final ExecutorService mIcons = Executors.newSingleThreadExecutor();
-    /** "site|jsId" -> Android notification id. */
+    /** "account|site|jsId" -> Android notification id. */
     private final Map<String, Integer> mByJsId = new HashMap<>();
     private String mCallAlertKey;
+    /** Tab (account|site) whose call is ringing. */
+    private String mCallAlertTab;
     private long mLastRingAlert;
     /** Last unread count per site, and when the site last raised a real web notification. */
-    private final Map<Site, Integer> mUnread = new EnumMap<>(Site.class);
-    private final Map<Site, Integer> mAnnounced = new EnumMap<>(Site.class);
-    private final Map<Site, Long> mLastWebNotification = new EnumMap<>(Site.class);
+    private final Map<String, Integer> mUnread = new HashMap<>();
+    private final Map<String, Integer> mAnnounced = new HashMap<>();
+    private final Map<String, Long> mLastWebNotification = new HashMap<>();
     private static final long FALLBACK_DELAY_MS = 3500;
     private static final long REAL_NOTIFICATION_WINDOW_MS = 12000;
 
@@ -125,40 +127,41 @@ public final class Notifier {
         return 1000 + (key.hashCode() & 0x3fffffff);
     }
 
-    public void showWebNotification(Site site, String jsId, String title, String body, String tag, String icon,
-            boolean requireInteraction, boolean silent, boolean renotify) {
+    public void showWebNotification(final BrowserTab tab, String jsId, String title, String body, String tag,
+            String icon, boolean requireInteraction, boolean silent, boolean renotify) {
+        Site site = tab.site;
         Prefs prefs = Prefs.get(mApp);
-        if (!prefs.notificationsEnabled(site)) return;
+        if (!tab.account.notificationsEnabled(site)) return;
         boolean isCall = site == Site.TEAMS && CallHeuristics.looksLikeIncomingCall(title, body, requireInteraction);
         if (isCall && prefs.callAlerts()) {
-            Log.i(TAG, site.key + ": incoming-call notification -> call alert");
-            showCallAlert(site, jsId, title, body);
+            Log.i(TAG, tab.key + ": incoming-call notification -> call alert");
+            showCallAlert(tab, jsId, title, body);
             return;
         }
-        // The user is already looking at this site; the page shows its own in-app toast.
-        if (UiState.isLookingAt(site)) {
-            Log.i(TAG, site.key + ": notification suppressed (site is on screen)");
+        // The user is already looking at this tab; the page shows its own in-app toast.
+        if (UiState.isLookingAt(tab.key)) {
+            Log.i(TAG, tab.key + ": notification suppressed (tab is on screen)");
             return;
         }
 
-        String key = site.key + "|" + (tag == null || tag.isEmpty() ? "id:" + jsId : "tag:" + tag);
+        String key = tab.key + "|" + (tag == null || tag.isEmpty() ? "id:" + jsId : "tag:" + tag);
         final int id = idFor(key);
-        mByJsId.put(site.key + "|" + jsId, id);
+        mByJsId.put(tab.key + "|" + jsId, id);
         // A real notification from the site: it replaces WorkDeck's unread-count fallback.
-        mLastWebNotification.put(site, SystemClock.elapsedRealtime());
-        mNm.cancel(unreadId(site));
-        final Notification.Builder b = baseBuilder(site, site == Site.TEAMS ? CH_TEAMS : CH_OUTLOOK)
+        mLastWebNotification.put(tab.key, SystemClock.elapsedRealtime());
+        mNm.cancel(unreadId(tab.key));
+        final Notification.Builder b = baseBuilder(tab, site == Site.TEAMS ? CH_TEAMS : CH_OUTLOOK)
                 .setContentTitle(title.isEmpty() ? mApp.getString(site.titleRes) : title)
                 .setContentText(body)
                 .setStyle(new Notification.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
                 .setCategory(site == Site.TEAMS ? Notification.CATEGORY_MESSAGE : Notification.CATEGORY_EMAIL)
-                .setContentIntent(openIntent(site, jsId, id))
-                .setGroup("workdeck_" + site.key)
+                .setContentIntent(openIntent(tab, jsId, id))
+                .setGroup("workdeck_" + tab.key)
                 .setOnlyAlertOnce(silent || (!renotify && tag != null && !tag.isEmpty() && isActive(id)));
         post(id, b);
         if (icon != null && !icon.isEmpty()) {
-            loadIconAsync(icon, new IconCallback() {
+            loadIconAsync(icon, tab.cookies(), new IconCallback() {
                 @Override
                 public void onIcon(Bitmap bmp) {
                     if (!isActive(id)) return;
@@ -169,9 +172,9 @@ public final class Notifier {
         }
     }
 
-    public void closeWebNotification(Site site, String jsId) {
-        String k = site.key + "|" + jsId;
-        Log.i(TAG, site.key + ": page closed notification " + jsId + (k.equals(mCallAlertKey) ? " (call alert)" : ""));
+    public void closeWebNotification(BrowserTab tab, String jsId) {
+        String k = tab.key + "|" + jsId;
+        Log.i(TAG, tab.key + ": page closed notification " + jsId + (k.equals(mCallAlertKey) ? " (call alert)" : ""));
         if (k.equals(mCallAlertKey)) {
             cancelCallAlert();
         }
@@ -179,10 +182,10 @@ public final class Notifier {
         if (id != null) mNm.cancel(id);
     }
 
-    /** Clears notifications of a site (e.g. when the user opens it). */
-    public void clearSite(Site site) {
-        mNm.cancel(unreadId(site));
-        String prefix = site.key + "|";
+    /** Clears notifications of a tab (e.g. when the user opens it). */
+    public void clearTab(String tabKey) {
+        mNm.cancel(unreadId(tabKey));
+        String prefix = tabKey + "|";
         for (Map.Entry<String, Integer> e : new HashMap<>(mByJsId).entrySet()) {
             if (e.getKey().startsWith(prefix)) {
                 mNm.cancel(e.getValue());
@@ -201,13 +204,13 @@ public final class Notifier {
         return false;
     }
 
-    private Notification.Builder baseBuilder(Site site, String channel) {
+    private Notification.Builder baseBuilder(BrowserTab tab, String channel) {
         return new Notification.Builder(mApp, channel)
                 .setSmallIcon(R.drawable.ic_stat_workdeck)
                 .setColor(mApp.getColor(R.color.wd_primary))
                 .setShowWhen(true)
                 .setWhen(System.currentTimeMillis())
-                .setSubText(mApp.getString(site.titleRes));
+                .setSubText(tab.label());
     }
 
     private void post(int id, Notification.Builder b) {
@@ -219,10 +222,11 @@ public final class Notifier {
         }
     }
 
-    private PendingIntent openIntent(Site site, String jsId, int requestCode) {
+    private PendingIntent openIntent(BrowserTab tab, String jsId, int requestCode) {
         Intent i = new Intent(mApp, MainActivity.class)
                 .setAction(MainActivity.ACTION_OPEN_SITE)
-                .putExtra(MainActivity.EXTRA_SITE, site.key)
+                .putExtra(MainActivity.EXTRA_SITE, tab.site.key)
+                .putExtra(MainActivity.EXTRA_ACCOUNT, tab.account.id)
                 .putExtra(MainActivity.EXTRA_NOTIFICATION_ID, jsId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return PendingIntent.getActivity(mApp, requestCode, i,
@@ -231,14 +235,21 @@ public final class Notifier {
 
     // ------------------------------------------------------------------ unread-count fallback
 
-    static int unreadId(Site site) {
-        return idFor(site.key + "|unread");
+    static int unreadId(String tabKey) {
+        return idFor(tabKey + "|unread");
     }
 
     /** A page (re)loaded: its first unread count is a baseline, not news. */
-    public void resetUnreadBaseline(Site site) {
-        mUnread.remove(site);
-        mAnnounced.remove(site);
+    public void resetUnreadBaseline(String tabKey) {
+        mUnread.remove(tabKey);
+        mAnnounced.remove(tabKey);
+    }
+
+    /** The page says this count is a starting point (e.g. still loading), not new mail. */
+    public void setUnreadBaseline(String tabKey, int count) {
+        mUnread.put(tabKey, count);
+        mAnnounced.put(tabKey, count);
+        if (count <= 0) mNm.cancel(unreadId(tabKey));
     }
 
     /**
@@ -247,51 +258,51 @@ public final class Notifier {
      * isn't looking, WorkDeck posts one itself - unless the site's own notification
      * arrives within a few seconds.
      */
-    public void onUnreadChanged(final com.workdeck.app.web.BrowserTab tab, final int count) {
-        final Site site = tab.site;
-        Integer prevObj = mUnread.get(site);
-        mUnread.put(site, count);
+    public void onUnreadChanged(final BrowserTab tab, final int count) {
+        final String k = tab.key;
+        Integer prevObj = mUnread.get(k);
+        mUnread.put(k, count);
         boolean freshPage = SystemClock.elapsedRealtime() - tab.loadedAt() < 20000;
         if (freshPage) {
-            Log.i(TAG, site.key + ": unread " + count + " taken as baseline (page just loaded)");
-            mAnnounced.put(site, count); // counts shown while a page is still loading are not news
+            Log.i(TAG, k + ": unread " + count + " taken as baseline (page just loaded)");
+            mAnnounced.put(k, count); // counts shown while a page is still loading are not news
             return;
         }
         // No change seen yet means the page has been sitting at zero.
         int prev = prevObj == null ? 0 : prevObj;
-        Integer announcedObj = mAnnounced.get(site);
+        Integer announcedObj = mAnnounced.get(k);
         final int announced = announcedObj == null ? prev : announcedObj;
         if (count < announced) {
             // Titles sometimes flicker; only accept a drop that sticks.
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    Integer now = mUnread.get(site);
-                    Integer ann = mAnnounced.get(site);
+                    Integer now = mUnread.get(k);
+                    Integer ann = mAnnounced.get(k);
                     if (now != null && ann != null && now < ann) {
-                        mAnnounced.put(site, now);
-                        if (now <= 0) mNm.cancel(unreadId(site));
+                        mAnnounced.put(k, now);
+                        if (now <= 0) mNm.cancel(unreadId(k));
                     }
                 }
             }, 6000);
             return;
         }
         if (count == announced) return;
-        mAnnounced.put(site, count);
-        if (UiState.isLookingAt(site) || !Prefs.get(mApp).notificationsEnabled(site)) return;
-        Log.i(TAG, site.key + ": unread " + announced + " -> " + count);
+        mAnnounced.put(k, count);
+        if (UiState.isLookingAt(k) || !tab.account.notificationsEnabled(tab.site)) return;
+        Log.i(TAG, k + ": unread " + announced + " -> " + count);
         mMain.postDelayed(new Runnable() {
             @Override
             public void run() {
-                Long real = mLastWebNotification.get(site);
+                Long real = mLastWebNotification.get(k);
                 if (real != null && SystemClock.elapsedRealtime() - real < REAL_NOTIFICATION_WINDOW_MS) return;
-                final Integer now = mUnread.get(site);
-                if (now == null || now <= 0 || UiState.isLookingAt(site)) return;
+                final Integer now = mUnread.get(k);
+                if (now == null || now <= 0 || UiState.isLookingAt(k)) return;
                 tab.evaluate("window.__wdUnreadPreview ? JSON.stringify(window.__wdUnreadPreview()) : 'null'",
                         new android.webkit.ValueCallback<String>() {
                             @Override
                             public void onReceiveValue(String value) {
-                                postUnread(site, now, parsePreview(value));
+                                postUnread(tab, now, parsePreview(value));
                             }
                         });
             }
@@ -312,23 +323,24 @@ public final class Notifier {
         }
     }
 
-    private void postUnread(Site site, int count, String[] preview) {
+    private void postUnread(BrowserTab tab, int count, String[] preview) {
+        Site site = tab.site;
         boolean teams = site == Site.TEAMS;
         String countText = mApp.getString(teams ? R.string.unread_teams_text : R.string.unread_outlook_text, count);
         String title = preview != null ? preview[0]
                 : mApp.getString(teams ? R.string.unread_teams_title : R.string.unread_outlook_title);
         String body = preview != null && !preview[1].isEmpty() ? preview[1] + "\n" + countText : countText;
-        int id = unreadId(site);
-        Notification.Builder b = baseBuilder(site, teams ? CH_TEAMS : CH_OUTLOOK)
+        int id = unreadId(tab.key);
+        Notification.Builder b = baseBuilder(tab, teams ? CH_TEAMS : CH_OUTLOOK)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(new Notification.BigTextStyle().bigText(body))
                 .setNumber(count)
                 .setAutoCancel(true)
                 .setCategory(teams ? Notification.CATEGORY_MESSAGE : Notification.CATEGORY_EMAIL)
-                .setContentIntent(openIntent(site, null, id))
-                .setGroup("workdeck_" + site.key);
-        Log.i(TAG, site.key + ": unread fallback notification (" + count + ", preview=" + (preview != null) + ")");
+                .setContentIntent(openIntent(tab, null, id))
+                .setGroup("workdeck_" + tab.key);
+        Log.i(TAG, tab.key + ": unread fallback notification (" + count + ", preview=" + (preview != null) + ")");
         post(id, b);
     }
 
@@ -338,27 +350,29 @@ public final class Notifier {
      * Teams is showing its incoming-call screen (Accept/Decline) in the background, or
      * stopped showing it (answered elsewhere, missed, declined).
      */
-    public void onCallScreen(Site site, boolean ringing, String who) {
-        if (site != Site.TEAMS) return;
+    public void onCallScreen(BrowserTab tab, boolean ringing, String who) {
+        if (tab.site != Site.TEAMS) return;
         if (!ringing) {
             // The call screen went away (answered, declined, missed): stop ringing.
             if (mCallAlertKey != null) cancelCallAlert();
             return;
         }
-        if (!Prefs.get(mApp).callAlerts() || UiState.isLookingAt(site)) return;
+        if (!Prefs.get(mApp).callAlerts() || UiState.isLookingAt(tab.key)) return;
         if (mCallAlertKey != null) return; // already ringing for this call
         String title = who == null || who.trim().isEmpty() ? mApp.getString(R.string.incoming_call) : who.trim();
         Log.i(TAG, "incoming call screen detected");
-        showCallAlert(site, "ui", title, mApp.getString(R.string.incoming_call_text));
+        showCallAlert(tab, "ui", title, mApp.getString(R.string.incoming_call_text));
     }
 
-    public void showCallAlert(Site site, String jsId, String title, String body) {
-        mCallAlertKey = site.key + "|" + jsId;
+    public void showCallAlert(BrowserTab tab, String jsId, String title, String body) {
+        mCallAlertKey = tab.key + "|" + jsId;
+        mCallAlertTab = tab.key;
         Log.i(TAG, "call alert shown for " + mCallAlertKey);
         mLastRingAlert = SystemClock.elapsedRealtime();
         Intent full = new Intent(mApp, MainActivity.class)
                 .setAction(MainActivity.ACTION_INCOMING_CALL)
-                .putExtra(MainActivity.EXTRA_SITE, site.key)
+                .putExtra(MainActivity.EXTRA_SITE, tab.site.key)
+                .putExtra(MainActivity.EXTRA_ACCOUNT, tab.account.id)
                 .putExtra(MainActivity.EXTRA_NOTIFICATION_ID, jsId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent fullPi = PendingIntent.getActivity(mApp, 11, full,
@@ -370,8 +384,10 @@ public final class Notifier {
         PendingIntent declinePi = PendingIntent.getBroadcast(mApp, 13, decline,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification.Builder b = baseBuilder(site, CH_CALLS)
-                .setContentTitle(title.isEmpty() ? mApp.getString(R.string.incoming_call) : title)
+        String callTitle = title.isEmpty() ? mApp.getString(R.string.incoming_call) : title;
+        if (com.workdeck.app.Accounts.get(mApp).multiple()) callTitle = callTitle + " (" + tab.account.name + ")";
+        Notification.Builder b = baseBuilder(tab, CH_CALLS)
+                .setContentTitle(callTitle)
                 .setContentText(body.isEmpty() ? mApp.getString(R.string.incoming_call_text) : body)
                 .setCategory(Notification.CATEGORY_CALL)
                 .setOngoing(true)
@@ -392,11 +408,16 @@ public final class Notifier {
     }
 
     /** The page started a looping ring sound while the app was not in front. */
-    public void onRingtoneHeard(Site site) {
-        if (site != Site.TEAMS || !Prefs.get(mApp).callAlerts()) return;
-        if (UiState.isLookingAt(site)) return;
+    public void onRingtoneHeard(BrowserTab tab) {
+        if (tab.site != Site.TEAMS || !Prefs.get(mApp).callAlerts()) return;
+        if (UiState.isLookingAt(tab.key)) return;
         if (SystemClock.elapsedRealtime() - mLastRingAlert < 30000) return;
-        showCallAlert(site, "", mApp.getString(R.string.incoming_call), mApp.getString(R.string.incoming_call_text));
+        showCallAlert(tab, "", mApp.getString(R.string.incoming_call), mApp.getString(R.string.incoming_call_text));
+    }
+
+    /** Tab key (account|site) of the call currently ringing, or null. */
+    public String callAlertTab() {
+        return mCallAlertKey == null ? null : mCallAlertTab;
     }
 
     public void cancelCallAlert() {
@@ -447,11 +468,11 @@ public final class Notifier {
         void onIcon(Bitmap bmp);
     }
 
-    private void loadIconAsync(final String url, final IconCallback cb) {
+    private void loadIconAsync(final String url, final CookieManager cookies, final IconCallback cb) {
         mIcons.execute(new Runnable() {
             @Override
             public void run() {
-                final Bitmap bmp = loadIcon(url);
+                final Bitmap bmp = loadIcon(url, cookies);
                 if (bmp != null) {
                     mMain.post(new Runnable() {
                         @Override
@@ -464,7 +485,7 @@ public final class Notifier {
         });
     }
 
-    private Bitmap loadIcon(String url) {
+    private Bitmap loadIcon(String url, CookieManager cookies) {
         try {
             byte[] data;
             if (url.startsWith("data:")) {
@@ -476,7 +497,7 @@ public final class Notifier {
                 conn.setConnectTimeout(8000);
                 conn.setReadTimeout(8000);
                 conn.setRequestProperty("User-Agent", UserAgents.desktop());
-                String cookie = CookieManager.getInstance().getCookie(url);
+                String cookie = cookies.getCookie(url);
                 if (cookie != null) conn.setRequestProperty("Cookie", cookie);
                 if (conn.getResponseCode() != 200) return null;
                 InputStream in = conn.getInputStream();

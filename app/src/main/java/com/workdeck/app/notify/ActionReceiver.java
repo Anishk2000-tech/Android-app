@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 
-import com.workdeck.app.Site;
 import com.workdeck.app.WorkDeckApp;
 import com.workdeck.app.call.CallManager;
 import com.workdeck.app.service.KeepAliveService;
@@ -25,8 +24,10 @@ public final class ActionReceiver extends BroadcastReceiver {
         if (action == null) return;
         switch (action) {
             case ACTION_DECLINE_CALL: {
-                Notifier.get(context).cancelCallAlert();
-                BrowserTab teams = TabManager.get(context).existing(Site.TEAMS);
+                Notifier n = Notifier.get(context);
+                String key = n.callAlertTab();
+                n.cancelCallAlert();
+                BrowserTab teams = TabManager.get(context).existing(key);
                 if (teams != null) teams.evaluate("window.__wdCallAction && window.__wdCallAction('decline')");
                 break;
             }

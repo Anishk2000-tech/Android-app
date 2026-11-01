@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One account in the bottom bar. Tapping it opens a drop-up with its Teams and Outlook. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="44dp"
+    android:layout_marginEnd="3dp"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:duplicateParentState="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingEnd="8dp">
+
+        <View
+            android:id="@+id/chip_dot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:importantForAccessibility="no" />
+
+        <ImageView
+            android:id="@+id/chip_icon"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:importantForAccessibility="no"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/chip_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="5dp"
+            android:maxWidth="120dp"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/wd_text2"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/chip_arrow"
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:layout_marginStart="1dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_chevron_up"
+            android:tint="@color/wd_icon" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/chip_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="16dp"
+        android:layout_gravity="top|end"
+        android:background="@drawable/badge_bg"
+        android:gravity="center"
+        android:minWidth="16dp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:textColor="#FFFFFF"
+        android:textSize="9sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+</FrameLayout>
