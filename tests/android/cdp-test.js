@@ -160,10 +160,17 @@ async function pageFor(pred) {
     d.innerHTML = '<div>CI Video Caller</div><div>is calling you</div><button aria-label="Accept video call">v</button>' +
       '<button aria-label="Accept audio call">a</button><button aria-label="Decline call">x</button>';
     document.body.appendChild(d); return 'ok'; })()`);
-  const screenRing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Video Caller') && r.includes('channel=calls')), 10000);
+  let screenRing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Video Caller') && r.includes('channel=calls')), 10000);
+  if (!screenRing) {
+    // The page may have been replaced (e.g. an outdated emulator WebView's reloading "unsupported" page): retry once.
+    await teams.eval(`(function () { if (document.getElementById('ci-call')) return 'present'; var d = document.createElement('div'); d.id = 'ci-call';
+      d.setAttribute('role', 'alertdialog'); d.innerHTML = '<div>CI Video Caller</div><button aria-label="Accept video call">v</button><button aria-label="Decline call">x</button>';
+      document.body.appendChild(d); return 'ok'; })()`);
+    screenRing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Video Caller') && r.includes('channel=calls')), 10000);
+  }
   check(screenRing, 'Teams call screen (Accept/Decline) in background rings with a call alert');
   if (!screenRing) diag('call screen');
-  await teams.eval(`document.getElementById('ci-call').remove(), 'ok'`);
+  await teams.eval(`(document.getElementById('ci-call') || { remove() {} }).remove(), 'ok'`);
   const screenGone = await waitFor(() => !wdNotifs().some((r) => r.includes('CI Video Caller')), 10000);
   check(screenGone, 'call alert stops when Teams removes its call screen');
 
