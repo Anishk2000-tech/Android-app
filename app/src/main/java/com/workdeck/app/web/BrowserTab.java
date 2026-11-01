@@ -100,6 +100,10 @@ public final class BrowserTab {
     private long mLoadedAt;
     private long mShownAt;
     private boolean mStarted;
+    /** The user can see this page right now (it is told it's "hidden" otherwise). */
+    private boolean mDrawn;
+    /** Off screen (detached) and kept awake. */
+    private boolean mParked;
 
     private final List<Listener> mListeners = new ArrayList<>();
 
@@ -215,6 +219,7 @@ public final class BrowserTab {
         wv.setDownloadListener(new TabDownloads(wv));
         registerScript();
         layoutHeadless();
+        keepAwake(); // created off screen (e.g. by the background service): awake from the start
         Log.i(TAG, key + ": WebView created in profile " + account.profile + ", docStart=" + mDocStartSupported
                 + (mProfileMissing ? ", PROFILE UNSUPPORTED" : ""));
     }
@@ -312,6 +317,7 @@ public final class BrowserTab {
 
     public void attach(ViewGroup container) {
         if (mWebView == null) return;
+        mParked = false;
         ViewGroup parent = (ViewGroup) mWebView.getParent();
         if (parent == container) return;
         if (parent != null) parent.removeView(mWebView);
@@ -321,11 +327,64 @@ public final class BrowserTab {
 
     public void detach() {
         if (mWebView == null) return;
-        ViewGroup parent = (ViewGroup) mWebView.getParent();
-        if (parent != null) parent.removeView(mWebView);
+        park();
         setHost(null);
-        layoutHeadless();
         cookies().flush();
+    }
+
+    // ------------------------------------------------------------------ staying awake off screen
+
+    /**
+     * Takes the page off the screen (another tab is shown) without letting the browser
+     * engine put it to sleep. The engine slows down pages it thinks are hidden - timers
+     * end up running only once a minute - which delays Teams'/Outlook's live connection,
+     * so new messages, mail and calls would arrive late. A detached WebView that the
+     * engine still considers visible keeps full speed and costs no drawing.
+     */
+    public void park() {
+        if (mWebView == null) return;
+        setDrawn(false);
+        ViewGroup parent = (ViewGroup) mWebView.getParent();
+        if (mParked && parent == null) return;
+        if (parent != null) {
+            // Visibility changes only reach the engine while attached: make it visible first.
+            if (mWebView.getVisibility() != View.VISIBLE) mWebView.setVisibility(View.VISIBLE);
+            parent.removeView(mWebView); // (this tells the engine "window gone")
+        }
+        mParked = true;
+        layoutHeadless();
+        keepAwake();
+    }
+
+    /** Tells the engine this page's window is visible (instant notifications), see {@link #park}. */
+    public void keepAwake() {
+        if (mWebView == null || !mPrefs.instantNotifications()) return;
+        try {
+            mWebView.dispatchWindowVisibilityChanged(View.VISIBLE);
+        } catch (Throwable t) {
+            Log.w(TAG, "keepAwake failed", t);
+        }
+    }
+
+    /** "Instant notifications" was switched off: let off-screen pages sleep again. */
+    void applyAwakeSetting() {
+        if (mWebView == null) return;
+        if (mPrefs.instantNotifications()) {
+            if (mWebView.getParent() == null || !mDrawn) keepAwake();
+        } else if (mWebView.getParent() == null) {
+            mWebView.dispatchWindowVisibilityChanged(View.GONE);
+        }
+    }
+
+    public boolean isDrawn() {
+        return mDrawn;
+    }
+
+    /** Whether the user can see this page; the page reports itself hidden otherwise. */
+    public void setDrawn(boolean drawn) {
+        if (drawn == mDrawn) return;
+        mDrawn = drawn;
+        evaluate("window.__wdDrawn && window.__wdDrawn(" + drawn + ")");
     }
 
     public void destroy() {

@@ -54,8 +54,10 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
         try {
             c.startForegroundService(new Intent(c, KeepAliveService.class).setAction(ACTION_START));
         } catch (Throwable t) {
-            // e.g. ForegroundServiceStartNotAllowedException when started from the background.
+            // e.g. ForegroundServiceStartNotAllowedException when started from the background
+            // (happens when the phone restricts WorkDeck's battery use).
             Log.w(TAG, "could not start service", t);
+            if (!UiState.activityVisible) Notifier.get(c).showRestartNeeded();
         }
     }
 
@@ -87,6 +89,8 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
         CallManager.get(this).addListener(this);
         registerNetwork();
         mMain.postDelayed(mWatchdog, WATCHDOG_MS);
+        Watchdog.schedule(this);
+        Notifier.get(this).cancelRestartNeeded();
     }
 
     @Override

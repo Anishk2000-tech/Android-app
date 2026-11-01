@@ -13,4 +13,5 @@
     <color name="wd_ok">#15803D</color>
     <color name="wd_warn">#B45309</color>
     <color name="launcher_bg">#0F766E</color>
+    <color name="wd_warn_bg">#FFF4E5</color>
 </resources>

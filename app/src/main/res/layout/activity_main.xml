@@ -12,6 +12,47 @@
         android:orientation="vertical">
 
         <LinearLayout
+            android:id="@+id/reliability_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/wd_warn_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/reliability_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/wd_text"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/reliability_fix"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:minWidth="56dp"
+                android:text="@string/rel_fix"
+                android:textAllCaps="false"
+                android:textColor="@color/wd_primary"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/reliability_later"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:contentDescription="@string/rel_later"
+                android:src="@drawable/ic_close"
+                android:tint="@color/wd_icon" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/tab_header"
             android:layout_width="match_parent"
             android:layout_height="44dp"

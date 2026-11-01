@@ -197,6 +197,13 @@ final class JsBridge {
         });
     }
 
+    /** Is this page on the user's screen right now? ("0": report the page as hidden.) */
+    @JavascriptInterface
+    public String drawn(String token) {
+        if (!ok(token)) return "1";
+        return mTab.isDrawn() ? "1" : "0";
+    }
+
     /** Next chunk (base64) of a file the user is attaching; "" at the end, null on error. */
     @JavascriptInterface
     public String attachRead(String token, String id, String offset) {

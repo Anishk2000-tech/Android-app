@@ -292,4 +292,21 @@
     <string name="set_loudness_desc">How loud WorkDeck plays message and mail sounds, compared to the sound itself. 300% is three times as loud. Lift your finger to hear it.</string>
     <string name="percent_value">%1$d%%</string>
     <string name="set_sounds_note">WorkDeck plays these sounds itself so they can be louder than usual. Silent mode, vibrate mode, Do Not Disturb and calls in progress still keep them quiet; your phone\'s notification volume still applies.</string>
+
+    <!-- Instant notifications (1.4) -->
+    <string name="set_instant">Instant notifications</string>
+    <string name="set_instant_desc">Keeps Teams and Outlook fully awake when they\'re not on screen, so messages, mail and calls arrive the moment they\'re sent. Uses a little more battery.</string>
+    <string name="rel_banner">Notifications may be late: %1$s</string>
+    <string name="rel_fix">Fix</string>
+    <string name="rel_later">Remind me later</string>
+    <string name="rel_notifications_off">notifications are switched off for WorkDeck.</string>
+    <string name="rel_keepalive">"Keep running in background" is off.</string>
+    <string name="rel_restricted">Android restricts WorkDeck\'s battery use in the background.</string>
+    <string name="rel_standby">Android put WorkDeck in its "restricted" group of rarely used apps.</string>
+    <string name="rel_battery">battery optimisation is on for WorkDeck.</string>
+    <string name="set_reliability">Check notification reliability</string>
+    <string name="set_reliability_ok">Everything is set for instant notifications \u2713</string>
+    <string name="set_reliability_bad">%1$s Tap to fix.</string>
+    <string name="restart_title">WorkDeck was stopped by the phone</string>
+    <string name="restart_text">Tap to reconnect Teams and Outlook. To stop this happening: Settings → Apps → WorkDeck → Battery → Unrestricted (and on Samsung/Xiaomi/Oppo/Vivo phones, allow it to run in the background).</string>
 </resources>

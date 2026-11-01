@@ -46,6 +46,7 @@ const BRIDGE_MOCK = `
     mediaInfo(t) { return t === '${TOKEN}' ? JSON.stringify(window.__media) : ''; },
     setRoute(t, r) { this._rec('setRoute', arguments); },
     looking(t) { return window.__looking || '0'; },
+    drawn(t) { return window.__drawn || '1'; },
     setMic(t, m) { this._rec('setMic', arguments); },
     composeFocus(t, st) { this._rec('composeFocus', arguments); },
     attachDone(t, method, n, seen) { this._rec('attachDone', arguments); },
@@ -780,6 +781,38 @@ test('showOpenFilePicker (missing in Android WebView) opens the normal file choo
   await chooser.setFiles({ name: 'minutes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('pdf-bytes') });
   await page.waitForFunction(() => window.__picked);
   assert.strictEqual(await page.evaluate(() => window.__picked), 'file:minutes.pdf:pdf-bytes');
+  await ctx.close();
+});
+
+test('a page that is not on screen reports itself hidden and still gets (emulated) frames', async (b, base) => {
+  const ctx = await b.newContext();
+  // No real frames are drawn for an off-screen WebView: simulate that.
+  await ctx.addInitScript("window.__drawn = '0'; window.requestAnimationFrame = function () { return 7; }; window.cancelAnimationFrame = function () {};");
+  await ctx.addInitScript(BRIDGE_MOCK.replace("window.__calls = [];", "window.__calls = []; window.__drawn = '0';"));
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/mobile.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const events = [];
+    document.addEventListener('visibilitychange', () => events.push(document.visibilityState));
+    const offscreen = { vis: document.visibilityState, hidden: document.hidden };
+    let fired = 0, canceled = 0;
+    requestAnimationFrame((ts) => { fired = typeof ts === 'number' ? 1 : -1; });
+    const id = requestAnimationFrame(() => { canceled = 1; });
+    cancelAnimationFrame(id);
+    await wait(500);
+    window.__wdDrawn(true);
+    const shown = { vis: document.visibilityState, hidden: document.hidden };
+    window.__wdDrawn(false);
+    return { offscreen, shown, fired, canceled, events, after: document.visibilityState };
+  });
+  assert.deepStrictEqual(r.offscreen, { vis: 'hidden', hidden: true }, 'off screen: the page is told it is hidden');
+  assert.strictEqual(r.fired, 1, 'animation frames still come off screen (emulated)');
+  assert.strictEqual(r.canceled, 0, 'cancelAnimationFrame cancels an emulated frame');
+  assert.deepStrictEqual(r.shown, { vis: 'visible', hidden: false });
+  assert.deepStrictEqual(r.events, ['visible', 'hidden'], 'visibilitychange fires when WorkDeck shows / hides the tab');
+  assert.strictEqual(r.after, 'hidden');
   await ctx.close();
 });
 

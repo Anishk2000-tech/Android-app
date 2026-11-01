@@ -79,6 +79,14 @@ public final class Prefs {
     public boolean startOnBoot() { return sp.getBoolean("start_on_boot", true); }
     public void setStartOnBoot(boolean v) { sp.edit().putBoolean("start_on_boot", v).apply(); }
 
+    /** Keep pages that aren't on screen fully awake so messages arrive instantly. */
+    public boolean instantNotifications() { return sp.getBoolean("instant_notifications", true); }
+    public void setInstantNotifications(boolean v) { sp.edit().putBoolean("instant_notifications", v).apply(); }
+
+    /** "Remind me later" on the notification-reliability bar: hidden until this time. */
+    public long reliabilitySnoozedUntil() { return sp.getLong("rel_snooze", 0); }
+    public void snoozeReliability(long until) { sp.edit().putLong("rel_snooze", until).apply(); }
+
     public boolean autoRefresh() { return sp.getBoolean("auto_refresh", true); }
     public void setAutoRefresh(boolean v) { sp.edit().putBoolean("auto_refresh", v).apply(); }
 

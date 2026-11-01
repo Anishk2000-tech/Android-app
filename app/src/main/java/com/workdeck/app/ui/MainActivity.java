@@ -172,7 +172,6 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         mTabs.setHost(this);
         mTabs.addGlobalListener(mTabListener);
         mTabs.startBackground();
-        for (BrowserTab t : mTabs.allTabs()) t.attach(mWebContainer);
         buildChips();
 
         Account initial = mAccounts.active();
@@ -194,6 +193,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         super.onStart();
         UiState.activityVisible = true;
         KeepAliveService.onUiVisibilityChanged();
+        if (mTabs != null) {
+            mTabs.setUiVisible(true);
+            refreshUi();
+        }
     }
 
     @Override
@@ -215,6 +218,35 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         clearNotificationsOfCurrent();
         refreshUi();
+        updateReliabilityBanner();
+    }
+
+    /** A bar on top when phone settings will delay or stop notifications, with a one-tap fix. */
+    private void updateReliabilityBanner() {
+        View bar = findViewById(R.id.reliability_banner);
+        if (bar == null) return;
+        final List<Reliability.Problem> problems = Reliability.check(this);
+        if (problems.isEmpty() || System.currentTimeMillis() < mPrefs.reliabilitySnoozedUntil()) {
+            bar.setVisibility(View.GONE);
+            return;
+        }
+        final Reliability.Problem p = problems.get(0);
+        ((TextView) findViewById(R.id.reliability_text)).setText(getString(R.string.rel_banner, Reliability.text(this, p)));
+        findViewById(R.id.reliability_fix).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Reliability.fix(MainActivity.this, p);
+                updateReliabilityBanner();
+            }
+        });
+        findViewById(R.id.reliability_later).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mPrefs.snoozeReliability(System.currentTimeMillis() + 3L * 24 * 60 * 60 * 1000);
+                updateReliabilityBanner();
+            }
+        });
+        bar.setVisibility(View.VISIBLE);
     }
 
     @Override
@@ -228,6 +260,11 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     protected void onStop() {
         UiState.activityVisible = false;
+        if (mTabs != null) {
+            BrowserTab cur = currentTab();
+            if (cur != null) cur.setDrawn(false);
+            mTabs.setUiVisible(false); // keeps every page awake while WorkDeck isn't on screen
+        }
         super.onStop();
     }
 
@@ -532,9 +569,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private void becameVisible(BrowserTab tab) {
         tab.markShown();
         UiState.visibleTab = tab.key;
-        for (BrowserTab t : mTabs.allTabs()) {
-            if (t.webView() != null) t.webView().setVisibility(t == tab ? View.VISIBLE : View.GONE);
-        }
+        layoutTabs(tab);
         if (UiState.activityResumed) clearNotificationsOfCurrent();
         updatePopupPanel();
         refreshUi();
@@ -973,17 +1008,29 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
     }
 
-    private void refreshUi() {
-        if (mTabs == null) return;
-        BrowserTab cur = currentTab();
-        // Re-assert which WebView is shown (a tab rebuilt after a renderer crash starts visible).
+    /**
+     * Only the tab on screen is attached; every other tab is parked off screen, where it
+     * stays awake (instant notifications) without being drawn.
+     */
+    private void layoutTabs(BrowserTab cur) {
         for (BrowserTab t : mTabs.allTabs()) {
             WebView w = t.webView();
             if (w == null) continue;
-            int want = t == cur ? View.VISIBLE : View.GONE;
-            if (w.getVisibility() != want) w.setVisibility(want);
-            if (w.getParent() == null) t.attach(mWebContainer);
+            if (t == cur) {
+                if (w.getParent() != mWebContainer) t.attach(mWebContainer);
+                if (w.getVisibility() != View.VISIBLE) w.setVisibility(View.VISIBLE);
+                t.setDrawn(UiState.activityVisible);
+            } else {
+                t.park();
+            }
         }
+    }
+
+    private void refreshUi() {
+        if (mTabs == null) return;
+        BrowserTab cur = currentTab();
+        // Re-assert which WebView is shown (a tab rebuilt after a renderer crash, a new tab...).
+        layoutTabs(cur);
         refreshChips();
         if (cur != null && cur.isWeb() && !mInPip) {
             mTabHeader.setVisibility(View.VISIBLE);

@@ -16,5 +16,6 @@ public final class BootReceiver extends BroadcastReceiver {
         if (!p.setupDone() || !p.keepAlive()) return;
         if (Intent.ACTION_BOOT_COMPLETED.equals(a) && !p.startOnBoot()) return;
         KeepAliveService.start(context);
+        Watchdog.schedule(context);
     }
 }

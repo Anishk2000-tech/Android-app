@@ -29,6 +29,7 @@ import com.workdeck.app.web.TabManager;
 public final class SettingsActivity extends Activity {
     private Prefs mPrefs;
     private TextView mAccountsRow;
+    private TextView mReliabilityRow;
     private static final int REQ_RINGTONE = 10;
     private static final int REQ_SOUND_FILE = 11;
     private Site mSoundSite;
@@ -138,6 +139,26 @@ public final class SettingsActivity extends Activity {
                 mPrefs.setKeepAlive(v);
                 if (v) KeepAliveService.start(SettingsActivity.this);
                 else KeepAliveService.stop(SettingsActivity.this);
+            }
+        });
+        mReliabilityRow = Ui.clickRow(bg, getString(R.string.set_reliability), reliabilitySummary(),
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        java.util.List<Reliability.Problem> ps = Reliability.check(SettingsActivity.this);
+                        if (ps.isEmpty()) {
+                            startActivity(new Intent(SettingsActivity.this, SetupActivity.class)
+                                    .putExtra(SetupActivity.EXTRA_FROM_MENU, true));
+                        } else {
+                            Reliability.fix(SettingsActivity.this, ps.get(0));
+                        }
+                    }
+                });
+        toggle(bg, R.string.set_instant, R.string.set_instant_desc, mPrefs.instantNotifications(), new Toggle() {
+            @Override
+            public void set(boolean v) {
+                mPrefs.setInstantNotifications(v);
+                TabManager.get(SettingsActivity.this).applyAwakeSetting();
             }
         });
         toggle(bg, R.string.set_wakelock, R.string.set_wakelock_desc, mPrefs.cpuWakeLock(), new Toggle() {
@@ -396,6 +417,13 @@ public final class SettingsActivity extends Activity {
         parent.addView(row);
     }
 
+    private String reliabilitySummary() {
+        java.util.List<Reliability.Problem> ps = Reliability.check(this);
+        if (ps.isEmpty()) return getString(R.string.set_reliability_ok);
+        String t = Reliability.text(this, ps.get(0));
+        return getString(R.string.set_reliability_bad, Character.toUpperCase(t.charAt(0)) + t.substring(1));
+    }
+
     private String accountsSummary() {
         StringBuilder sb = new StringBuilder();
         for (Account a : Accounts.get(this).list()) {
@@ -409,5 +437,6 @@ public final class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (mAccountsRow != null) mAccountsRow.setText(accountsSummary());
+        if (mReliabilityRow != null) mReliabilityRow.setText(reliabilitySummary());
     }
 }

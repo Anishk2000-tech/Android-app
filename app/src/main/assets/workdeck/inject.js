@@ -50,6 +50,85 @@
     try { Object.defineProperty(obj, prop, { value: value, configurable: true, enumerable: true }); } catch (e) {}
   }
 
+  // ------------------------------------------------------------------ on screen or not
+  // WorkDeck keeps pages that are not on screen fully awake (the engine would otherwise
+  // slow them down until messages arrive late). The page itself is still told the truth:
+  // "hidden" whenever the user can't see it, so Teams/Outlook keep raising notifications.
+  // Nothing is drawn off screen, so animation frames never come; web apps also use them
+  // to update the page (new messages, the incoming-call screen), so they are emulated
+  // with timers while the page isn't drawn.
+  var drawnCache = true, drawnAt = 0, drawnPushed = false;
+  var isDrawn = function () {
+    if (!drawnPushed) {
+      var now = Date.now();
+      if (now - drawnAt > 1000) {
+        var v = call('drawn');
+        drawnCache = v !== '0';
+        drawnAt = now;
+      }
+    }
+    return drawnCache;
+  };
+  var pendingFrames = {};
+  var armFrameFallbacks = function () {
+    Object.keys(pendingFrames).forEach(function (id) {
+      var e = pendingFrames[id];
+      if (e && !e.t) e.t = setTimeout(e.fallback, 200);
+    });
+  };
+  try {
+    var visDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+    var hidDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+    if (visDesc && visDesc.get && hidDesc && hidDesc.get) {
+      getter(Document.prototype, 'visibilityState', function () { return isDrawn() ? visDesc.get.call(this) : 'hidden'; });
+      getter(Document.prototype, 'hidden', function () { return isDrawn() ? hidDesc.get.call(this) : true; });
+    }
+  } catch (e) {}
+  if (isTop) {
+    hidden(window, '__wdDrawn', function (on) {
+      var was = isDrawn();
+      drawnCache = !!on;
+      drawnPushed = true;
+      if (was !== drawnCache) {
+        try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
+      }
+      if (!drawnCache) armFrameFallbacks();
+    });
+  }
+  if (typeof window.requestAnimationFrame === 'function') {
+    var origRAF = window.requestAnimationFrame;
+    var origCAF = window.cancelAnimationFrame;
+    var frameSeq = 1;
+    hidden(window, 'requestAnimationFrame', function (cb) {
+      var id = frameSeq++;
+      var entry = { done: false, t: 0, r: 0 };
+      var run = function (ts) {
+        if (entry.done) return;
+        entry.done = true;
+        delete pendingFrames[id];
+        if (entry.t) clearTimeout(entry.t);
+        cb(ts);
+      };
+      entry.fallback = function () {
+        entry.t = 0;
+        try { origCAF.call(window, entry.r); } catch (e) {}
+        run(performance.now());
+      };
+      entry.r = origRAF.call(window, run);
+      pendingFrames[id] = entry;
+      if (!isDrawn()) entry.t = setTimeout(entry.fallback, 200);
+      return id;
+    });
+    hidden(window, 'cancelAnimationFrame', function (id) {
+      var e = pendingFrames[id];
+      if (!e) return;
+      e.done = true;
+      delete pendingFrames[id];
+      if (e.t) clearTimeout(e.t);
+      try { origCAF.call(window, e.r); } catch (x) {}
+    });
+  }
+
   // ------------------------------------------------------------------ identity
   function installUAData(low, high) {
     var proto = (typeof NavigatorUAData !== 'undefined' && NavigatorUAData.prototype) || Object.prototype;

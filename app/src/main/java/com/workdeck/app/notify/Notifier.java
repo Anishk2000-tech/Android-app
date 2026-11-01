@@ -76,6 +76,14 @@ public final class Notifier {
     private final Map<String, Integer> mUnread = new HashMap<>();
     private final Map<String, Integer> mAnnounced = new HashMap<>();
     private final Map<String, Long> mLastWebNotification = new HashMap<>();
+    /**
+     * Unread count the user was last told about before a page reloaded (crash recovery,
+     * reconnect, scheduled refresh). Messages that arrive while it reloads are announced
+     * once the page has settled, instead of being taken as "already seen".
+     */
+    private final Map<String, Integer> mCarry = new HashMap<>();
+    private final Map<String, Long> mLastBaselineAt = new HashMap<>();
+    private static final long SETTLE_MS = 21000;
     private static final long FALLBACK_DELAY_MS = 3500;
     private static final long REAL_NOTIFICATION_WINDOW_MS = 12000;
 
@@ -268,15 +276,63 @@ public final class Notifier {
 
     /** A page (re)loaded: its first unread count is a baseline, not news. */
     public void resetUnreadBaseline(String tabKey) {
+        Integer told = mAnnounced.get(tabKey);
+        if (told == null) told = mCarry.get(tabKey);
         mUnread.remove(tabKey);
         mAnnounced.remove(tabKey);
+        if (told != null) mCarry.put(tabKey, told);
     }
 
     /** The page says this count is a starting point (e.g. still loading), not new mail. */
     public void setUnreadBaseline(String tabKey, int count) {
         mUnread.put(tabKey, count);
+        mLastBaselineAt.put(tabKey, SystemClock.elapsedRealtime());
+        Integer carry = mCarry.get(tabKey);
+        if (carry != null) {
+            // A reload: keep what the user was told; the settle check announces anything new.
+            mAnnounced.put(tabKey, carry);
+            scheduleSettle(tabKey);
+            return;
+        }
         mAnnounced.put(tabKey, count);
         if (count <= 0) mNm.cancel(unreadId(tabKey));
+    }
+
+    private final java.util.Set<String> mSettleScheduled = new java.util.HashSet<>();
+
+    private void scheduleSettle(final String k) {
+        if (!mSettleScheduled.add(k)) return;
+        com.workdeck.app.web.BrowserTab t = com.workdeck.app.web.TabManager.get(mApp).existing(k);
+        long since = t == null ? 0 : SystemClock.elapsedRealtime() - t.loadedAt();
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Long lastBase = mLastBaselineAt.get(k);
+                if (lastBase != null && SystemClock.elapsedRealtime() - lastBase < 2500) {
+                    // Still loading its counts: check again shortly.
+                    mMain.postDelayed(this, 3000);
+                    return;
+                }
+                mSettleScheduled.remove(k);
+                settle(k);
+            }
+        }, Math.max(1000, SETTLE_MS - since));
+    }
+
+    /** After a reload: announce messages that arrived meanwhile (count above what the user was told). */
+    private void settle(String k) {
+        Integer carry = mCarry.remove(k);
+        Integer now = mUnread.get(k);
+        if (carry == null || now == null) return;
+        com.workdeck.app.web.BrowserTab tab = com.workdeck.app.web.TabManager.get(mApp).existing(k);
+        if (now > carry && tab != null) {
+            Log.i(TAG, k + ": " + (now - carry) + " message(s) arrived while the page reloaded");
+            mAnnounced.put(k, now);
+            if (!UiState.isLookingAt(k) && tab.account.notificationsEnabled(tab.site)) announceRise(tab);
+        } else {
+            mAnnounced.put(k, now);
+            if (now <= 0) mNm.cancel(unreadId(k));
+        }
     }
 
     /**
@@ -291,6 +347,13 @@ public final class Notifier {
         mUnread.put(k, count);
         boolean freshPage = SystemClock.elapsedRealtime() - tab.loadedAt() < 20000;
         if (freshPage) {
+            Integer carry = mCarry.get(k);
+            if (carry != null) {
+                // Reloaded page: compare with what the user was told once it has settled.
+                mAnnounced.put(k, carry);
+                scheduleSettle(k);
+                return;
+            }
             Log.i(TAG, k + ": unread " + count + " taken as baseline (page just loaded)");
             mAnnounced.put(k, count); // counts shown while a page is still loading are not news
             return;
@@ -318,6 +381,12 @@ public final class Notifier {
         mAnnounced.put(k, count);
         if (UiState.isLookingAt(k) || !tab.account.notificationsEnabled(tab.site)) return;
         Log.i(TAG, k + ": unread " + announced + " -> " + count);
+        announceRise(tab);
+    }
+
+    /** Posts "N unread" (with the sender when readable) unless the site's own notification came. */
+    private void announceRise(final BrowserTab tab) {
+        final String k = tab.key;
         mMain.postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -446,6 +515,28 @@ public final class Notifier {
     /** Tab key (account|site) of the call currently ringing, or null. */
     public String callAlertTab() {
         return mCallAlertKey == null ? null : mCallAlertTab;
+    }
+
+    private static final int ID_RESTART = 3;
+
+    /** The phone stopped WorkDeck and won't let it restart by itself: ask for one tap. */
+    public void showRestartNeeded() {
+        PendingIntent open = PendingIntent.getActivity(mApp, 5,
+                new Intent(mApp, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder b = new Notification.Builder(mApp, CH_TEAMS)
+                .setSmallIcon(R.drawable.ic_stat_workdeck)
+                .setColor(mApp.getColor(R.color.wd_primary))
+                .setContentTitle(mApp.getString(R.string.restart_title))
+                .setContentText(mApp.getString(R.string.restart_text))
+                .setStyle(new Notification.BigTextStyle().bigText(mApp.getString(R.string.restart_text)))
+                .setContentIntent(open)
+                .setAutoCancel(true);
+        post(ID_RESTART, b);
+    }
+
+    public void cancelRestartNeeded() {
+        mNm.cancel(ID_RESTART);
     }
 
     public void cancelCallAlert() {

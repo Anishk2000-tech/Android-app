@@ -18,6 +18,13 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## What's new in 1.4.0
+* **Instant notifications, also after hours in the background.** Android's browser engine slows down web pages it thinks nobody sees — a page that isn't on screen gets its timers run at most once a second, after a few minutes only once a minute. That's what delayed Teams' and Outlook's live connection, so messages, mail and calls came late or only when you opened the app. WorkDeck now keeps every account's Teams and Outlook **fully awake** when they're not on screen — both while you use another tab and when WorkDeck is in the background behind other apps — without drawing them (no extra screen work). The pages are still told they're "hidden", so Teams and Outlook keep sending their notifications, and screen updates they'd normally wait for (new messages, the incoming-call screen) still happen.
+* **No message lost while a page reloads.** When Teams/Outlook reload (network change, crash recovery, the 12-hour refresh), messages that arrive meanwhile are announced afterwards instead of being counted as already seen.
+* **Self-check:** a bar on top warns when a phone setting will delay notifications (battery optimisation on, background use restricted, notifications off, ...) with a one-tap **Fix**; also in ⋮ → Settings → *Check notification reliability*.
+* **Watchdog:** every 15 minutes (also in deep sleep) WorkDeck checks it's still running and reconnects; if the phone stopped it and won't let it restart, you get a "tap to reconnect" notification.
+* Setting: ⋮ → Settings → *Instant notifications* (on by default; uses a little more battery).
+
 ## What's new in 1.3.0
 * **Send phone files in Teams and Outlook** — photos, videos, PDFs, documents, anything:
   * While you type in a chat or email, a **📎 button** appears in the bottom bar: tap it, pick one or more files, and they are added to the message (WorkDeck hands them to the message box the same way dragging files onto it does). Also in ⋮ → *Attach files from phone…*.
@@ -45,7 +52,7 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 ## 1. Install (step by step)
 
 1. **Download the APK** on your phone:
-   open **[release/WorkDeck-1.3.0.apk](release/WorkDeck-1.3.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
+   open **[release/WorkDeck-1.4.0.apk](release/WorkDeck-1.4.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
 2. Open the downloaded file (tap the download notification, or open *Files → Downloads*).
 3. If Android says *"For your security, your phone is not allowed to install unknown apps from this source"*: tap **Settings → turn on "Allow from this source"**, then go back.
 4. Tap **Install**. If **Play Protect** warns about an unknown app, tap **More details → Install anyway** (it warns about every app not from the Play Store).
@@ -120,13 +127,13 @@ The bottom bar:
 * **Meeting links** from mail or other apps: choose **WorkDeck** when Android asks which app to open them with.
 
 ### Settings (⋮ → Settings)
-**Accounts** (opens *Manage accounts*), **notification sounds** (Teams message sound, Outlook mail sound, *Notification loudness* 100–400%), *Open links inside WorkDeck*, desktop width, *Keep running in background*, *Reliable mode* (keeps the processor awake for instant notifications — uses more battery, on by default), *Start after restart*, call alerts/ringing, default call audio, picture-in-picture, **Sign out of all accounts**. Everything that belongs to one account (type, apps, view, notifications, custom start pages) is in that account's settings.
+**Accounts** (opens *Manage accounts*), *Check notification reliability*, **Instant notifications**, **notification sounds** (Teams message sound, Outlook mail sound, *Notification loudness* 100–400%), *Open links inside WorkDeck*, desktop width, *Keep running in background*, *Reliable mode* (keeps the processor awake for instant notifications — uses more battery, on by default), *Start after restart*, call alerts/ringing, default call audio, picture-in-picture, **Sign out of all accounts**. Everything that belongs to one account (type, apps, view, notifications, custom start pages) is in that account's settings.
 
 ## 5. Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| No notifications after a while | ⋮ → **Setup & permissions**: everything should say *Allowed ✓*. Do the phone-maker step (Autostart, battery *Unrestricted*, lock in Recents). See [dontkillmyapp.com](https://dontkillmyapp.com) for your phone. Keep *Reliable mode* on. |
+| No / late notifications after a while | Fix anything the yellow bar (or ⋮ → Settings → *Check notification reliability*) reports. Keep *Instant notifications* and *Reliable mode* on. ⋮ → **Setup & permissions**: everything should say *Allowed ✓*; do the phone-maker step (Autostart, battery *Unrestricted*, lock WorkDeck in Recents; Samsung: Settings → Battery → *Never sleeping apps* → add WorkDeck). See [dontkillmyapp.com](https://dontkillmyapp.com) for your phone. |
 | Outlook mail notifications missing | Open that account's Outlook once so it starts running; check the account's settings: *Keep running for notifications* and *Outlook notifications* on. Keep Outlook's folder list or message list on its **Inbox**. |
 | OMC / ACXIOM / a new account shows *"please update Android System WebView"* | Separate sign-ins need a recent WebView. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Quit and reopen WorkDeck. The first account (CRAFTWW) keeps working meanwhile. |
 | Two accounts show the same person | They can't share a sign-in (each has its own storage) — you signed in with the same email twice. Open the account's settings → *Sign out of this account* and sign in with the right email. |
@@ -156,6 +163,8 @@ setup screen; both tabs load; keep-alive foreground service (with microphone + c
 **Added in 1.1.0 and verified on the Android 14 emulator (real WebView):** Teams sees microphone + camera as allowed (WebView itself has no Permissions API), a named microphone, Front/Back camera and speaker outputs; the mic and camera open with those device ids; choosing *Phone earpiece* as Teams' speaker switches Android's call audio; a rising unread count without a site notification posts "N unread in Teams" (and removes it at 0); Teams' Accept/Decline call screen in the background rings and stops when it disappears.
 
 **Added in 1.2.0 and verified on emulators (Android 15 with WebView 124, Android 14 with WebView 113, Android 12 with WebView 91):** the bottom bar shows **CRAFTWW, OMC, ACXIOM** and **+**, and the CRAFTWW drop-up lists its Teams and Outlook; **Outlook new mail** (a stand-in Inbox served at outlook.office.com, since the CI has no Microsoft account) — the Inbox unread count going up posts *"3 unread in Outlook"* on the *Outlook mail* channel naming the sender, and the notification goes away when the mail is read; opening OMC creates OMC's own WebViews in its **own profile**, and on Android 15 a sign-in cookie stored in CRAFTWW is **not visible to OMC** (separate sign-ins); on the older emulator WebViews (no profile support) OMC shows the *please update Android System WebView* page instead of sharing CRAFTWW's sign-in. All 1.1 checks (calls, mic/camera/speaker, notifications, background survival) still pass with the new account system.
+
+**Added in 1.4.0:** pages that aren't on screen — another account's tab while you use WorkDeck, and every page while WorkDeck is in the background — run at full speed (timers measured on the emulators) while telling the page it's hidden and still delivering its screen updates; mail that arrives while Outlook reloads still raises a notification.
 
 **Added in 1.3.0 and verified on all three emulators (Android 15, 14, 12):** a link opened in Teams appears as a new tab of the same account with its title bar and ×, the account's drop-up lists it (with its ×) next to Teams, Outlook, *New tab…* and settings, and × closes it and returns to Teams; tapping a message box shows the 📎 button; a file shared from another app (*Share → CRAFTWW · Teams*) lands in the message box exactly once with its content intact, and shared text is typed in; WorkDeck plays the message sound itself at 300% (+9.5 dB); Teams' microphone list offers *Automatic* and *Phone microphone* (Bluetooth/headset entries appear when one is connected); a speaker the phone doesn't have falls back to one it has. All 1.1/1.2 checks still pass. (Only the Android 12 emulator's 2021 WebView keeps failing Teams' call-screen check, because Teams shows its "browser not supported" page there.)
 

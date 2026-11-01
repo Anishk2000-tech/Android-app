@@ -42,6 +42,8 @@ public final class TabManager {
     private final List<BrowserTab.Listener> mGlobalListeners = new ArrayList<>();
     private boolean mWebInitialized;
     private TabHost mHost;
+    private boolean mUiVisible;
+    private final android.os.Handler mMain = new android.os.Handler(android.os.Looper.getMainLooper());
 
     public static synchronized TabManager get(Context c) {
         if (sInstance == null) sInstance = new TabManager(c.getApplicationContext());
@@ -152,6 +154,33 @@ public final class TabManager {
                 t.destroy();
             }
         }
+    }
+
+    /**
+     * WorkDeck's screen became visible / invisible. While it's invisible every page is
+     * kept awake (Android tells the shown page its window is gone; that is undone here,
+     * and re-checked every minute), so messages keep arriving instantly.
+     */
+    public void setUiVisible(boolean visible) {
+        mUiVisible = visible;
+        mMain.removeCallbacks(mKeepAwake);
+        if (!visible) mMain.postDelayed(mKeepAwake, 1200);
+    }
+
+    private final Runnable mKeepAwake = new Runnable() {
+        @Override
+        public void run() {
+            for (BrowserTab t : mTabs.values()) {
+                t.setDrawn(false);
+                t.keepAwake();
+            }
+            if (!mUiVisible) mMain.postDelayed(this, 60000);
+        }
+    };
+
+    /** The "Instant notifications" setting changed. */
+    public void applyAwakeSetting() {
+        for (BrowserTab t : mTabs.values()) t.applyAwakeSetting();
     }
 
     public BrowserTab existing(String key) {

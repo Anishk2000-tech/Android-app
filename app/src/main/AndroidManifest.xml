@@ -142,6 +142,10 @@
         </receiver>
 
         <receiver
+            android:name=".service.Watchdog"
+            android:exported="false" />
+
+        <receiver
             android:name=".notify.ActionReceiver"
             android:exported="false" />
     </application>

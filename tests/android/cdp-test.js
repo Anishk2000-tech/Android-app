@@ -362,6 +362,11 @@ async function connectAll() {
     await ol.eval(`document.getElementById('count').textContent = '', 'ok'`, 10000);
     const mailGone = await waitFor(() => !wdNotifs().some((r) => r.includes('unread in Outlook')), 15000);
     check(mailGone, 'Outlook notification goes away when the Inbox has no unread mail');
+    // Mail that arrives while the page reloads (reconnect, crash recovery, refresh) is still announced.
+    await ol.send('Page.reload');
+    const reloadMail = await waitFor(() => wdNotifs().some((r) => r.includes('2 unread in Outlook')), 45000);
+    check(reloadMail, 'mail that arrived while Outlook was reloading still raises a notification');
+    if (!reloadMail) diag('reload mail');
     await ol.send('Fetch.disable');
     ol.close();
   }
@@ -484,6 +489,38 @@ async function connectAll() {
     check(/WorkDeck-CI-shared-text/.test(boxText), 'shared text is typed into the message box', boxText.slice(0, 80));
     await ct.c.send('Fetch.disable');
     ct.c.close();
+  }
+
+  // 11. Instant notifications: pages that aren't on screen keep running at full speed.
+  // (A page the browser engine considers hidden runs its timers at most once a second,
+  // later once a minute - that's what made messages arrive late.)
+  const speed = `new Promise((res) => { let n = 0, raf = false; const id = setInterval(() => n++, 100);
+      requestAnimationFrame(() => { raf = true; });
+      setTimeout(() => { clearInterval(id); res({ n, vis: document.visibilityState, raf }); }, 4000); })`;
+  sh(`adb shell am start -W -n ${PKG}/.ui.MainActivity`);
+  await sleep(2500);
+  await openApp('CRAFTWW', 'Teams');
+  await sleep(2000);
+  const byUrl = async (re) => { const p = (await pages()).find((x) => re.test(x.url)); return p ? connect(p.webSocketDebuggerUrl) : null; };
+  const shownTeams = await byUrl(/wd-ci-chat/);
+  const parkedOutlook = await byUrl(/wd-ci-inbox/);
+  if (!shownTeams || !parkedOutlook) {
+    check(false, 'stand-in Teams/Outlook pages reachable for the background-speed test', [!!shownTeams, !!parkedOutlook]);
+  } else {
+    const rp = await parkedOutlook.eval(speed, 15000);
+    check(rp && rp.n >= 25 && rp.vis === 'hidden' && rp.raf, 'a tab that is not on screen runs at full speed (and is told it is hidden)', rp);
+    const rs = await shownTeams.eval(speed, 15000);
+    check(rs && rs.vis === 'visible' && rs.n >= 25, 'the tab on screen is visible and runs normally', rs);
+    sh('adb shell input keyevent KEYCODE_HOME');
+    await sleep(6000);
+    const rb = await shownTeams.eval(speed, 15000);
+    check(rb && rb.n >= 25 && rb.vis === 'hidden' && rb.raf, 'with WorkDeck in the background, its pages still run at full speed', rb);
+    const ro = await parkedOutlook.eval(speed, 15000);
+    check(ro && ro.n >= 25, 'background: the other tabs too', ro);
+    shownTeams.close();
+    parkedOutlook.close();
+    sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
+    await sleep(2000);
   }
 
   console.log(failures ? `\n${failures} WebView check(s) FAILED` : '\nall WebView checks passed');
