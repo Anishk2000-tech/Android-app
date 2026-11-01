@@ -100,10 +100,13 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private TextView mTabTitle;
     private TextView mTabHost;
     private ImageButton mBtnAttach;
-    /** Files waiting for a message box to be opened in the tab with this key. */
+    /** Files (and text) waiting for the user to tap a message box in the tab with this key. */
     private List<com.workdeck.app.web.Attachments.Item> mPendingAttach;
     private String mPendingAttachKey;
     private String mPendingText;
+    private long mPendingSince;
+    /** Files handed to a page and not answered yet (never sent twice). */
+    private List<com.workdeck.app.web.Attachments.Item> mInFlight;
     private String mAttachTargetKey;
 
     private View mContent;
@@ -572,16 +575,17 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (t == null || items.isEmpty()) return;
         Toast.makeText(this, getResources().getQuantityString(R.plurals.attach_adding, items.size(), items.size()),
                 Toast.LENGTH_SHORT).show();
-        mPendingAttach = items;
+        mInFlight = items;
         mPendingAttachKey = t.key;
         t.attach(items);
     }
 
-    /** Files were waiting for a message box: the user just tapped one. */
+    /** Hands over what was waiting (exactly once: the waiting list is emptied right away). */
     private void deliverPending(final BrowserTab t) {
         if (mPendingAttach == null && mPendingText == null) return;
         final List<com.workdeck.app.web.Attachments.Item> items = mPendingAttach;
         final String text = mPendingText;
+        mPendingAttach = null;
         mPendingText = null;
         mMain.postDelayed(new Runnable() {
             @Override
@@ -590,19 +594,21 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 if (items != null) attachTo(t, items);
             }
         }, 400);
-        mPendingAttach = null;
     }
 
     @Override
     public void onAttachResult(BrowserTab tab, String method, int count, boolean seen) {
+        List<com.workdeck.app.web.Attachments.Item> sent = mInFlight;
+        mInFlight = null;
         if ("none".equals(method)) {
             // No message box open yet: keep the files until the user taps one.
+            mPendingAttach = sent;
+            mPendingAttachKey = tab.key;
+            mPendingSince = android.os.SystemClock.elapsedRealtime();
             Toast.makeText(this, R.string.attach_open_box, Toast.LENGTH_LONG).show();
             refreshUi();
             return;
         }
-        mPendingAttach = null;
-        mPendingAttachKey = null;
         if ("readfailed".equals(method)) {
             Toast.makeText(this, R.string.attach_read_failed, Toast.LENGTH_LONG).show();
         } else if ("unavailable".equals(method)) {
@@ -633,13 +639,14 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         mPendingAttach = items.isEmpty() ? null : items;
         mPendingAttachKey = t.key;
+        mPendingSince = android.os.SystemClock.elapsedRealtime();
         mPendingText = text == null || text.trim().isEmpty() ? null : text;
         if (mPendingAttach == null && mPendingText == null) return;
         // Give a page that was just opened a moment; otherwise the files wait for the message box.
         mMain.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (t.key.equals(mPendingAttachKey)) deliverPending(t);
+                if (t.key.equals(mPendingAttachKey)) deliverPending(t); // no-op if already handed over
             }
         }, t.progress() >= 100 ? 600 : 4000);
         Toast.makeText(this, R.string.attach_shared_hint, Toast.LENGTH_LONG).show();
@@ -986,9 +993,11 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         } else {
             mTabHeader.setVisibility(View.GONE);
         }
-        boolean composing = cur != null && (cur.composeFocused() || (mPendingAttach != null && cur.key.equals(mPendingAttachKey)));
+        boolean waiting = cur != null && (mPendingAttach != null || mPendingText != null) && cur.key.equals(mPendingAttachKey);
+        boolean composing = cur != null && (cur.composeFocused() || waiting);
         mBtnAttach.setVisibility(composing && !mInPip ? View.VISIBLE : View.GONE);
-        if (cur != null && cur.composeFocused() && cur.key.equals(mPendingAttachKey)) deliverPending(cur);
+        // The user just tapped a message box: deliver what was waiting for one.
+        if (waiting && cur.composeFocused() && cur.composeChangedAt() > mPendingSince) deliverPending(cur);
         boolean popupShown = mPopupPanel.getVisibility() == View.VISIBLE;
         if (cur != null) {
             int p = cur.progress();

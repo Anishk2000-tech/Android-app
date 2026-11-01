@@ -468,7 +468,9 @@ async function connectAll() {
       got = String(await ct.c.eval('JSON.stringify(window.__got || [])', 5000));
       if (/ci-report/.test(got)) break;
     }
-    check(/ci-report\.txt:quarterly-numbers/.test(got), 'a file shared to WorkDeck (Share → CRAFTWW · Teams) is attached in the message box', got);
+    await sleep(3000); // a duplicate would arrive within this time
+    got = String(await ct.c.eval('JSON.stringify(window.__got || [])', 5000));
+    check(got === '["ci-report.txt:quarterly-numbers"]', 'a file shared to WorkDeck (Share → CRAFTWW · Teams) is attached in the message box, once', got);
     shot('10-attached');
     sh(`adb shell am start -n ${PKG}/.ui.ShareActivity -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "WorkDeck-CI-shared-text"`);
     await sleep(2500);
