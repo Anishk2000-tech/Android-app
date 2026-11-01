@@ -26,11 +26,19 @@ alive() {
   fi
 }
 # Emulator system apps sometimes show "X isn't responding" over everything: close those.
+# Also closes WorkDeck's own "Please update Android System WebView" prompt, which old
+# emulator WebViews (Chrome 91 on Android 12) correctly trigger.
 dismiss_dialogs() {
   for i in 1 2 3; do
-    python3 scripts/ci/ui.py has "isn't responding" >/dev/null 2>&1 || return 0
-    echo "  closing a system 'isn't responding' dialog"
-    python3 scripts/ci/ui.py tap "Close app" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "Wait" >/dev/null 2>&1
+    if python3 scripts/ci/ui.py has "isn't responding" >/dev/null 2>&1; then
+      echo "  closing a system 'isn't responding' dialog"
+      python3 scripts/ci/ui.py tap "Close app" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "Wait" >/dev/null 2>&1
+    elif python3 scripts/ci/ui.py has "Please update Android System WebView" >/dev/null 2>&1; then
+      echo "  WorkDeck asks to update this emulator's old WebView: tapping Cancel"
+      python3 scripts/ci/ui.py tap "=CANCEL" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "=Cancel" >/dev/null 2>&1
+    else
+      return 0
+    fi
     sleep 2
   done
 }
