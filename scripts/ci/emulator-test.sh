@@ -62,7 +62,15 @@ run_setup_flow() {
 
 adb shell settings put global heads_up_notifications_enabled 1
 adb shell settings put global hide_error_dialogs 1 >/dev/null 2>&1 || true
-adb shell pm disable-user --user 0 com.google.android.googlesdksetup >/dev/null 2>&1 || true
+# Let the emulator finish its first-boot setup (it also brings up the network).
+for i in $(seq 1 40); do
+  if [ "$(adb shell settings get global device_provisioned 2>/dev/null | tr -d '\r')" = 1 ] \
+     && adb shell dumpsys connectivity 2>/dev/null | grep -q VALIDATED; then
+    echo "device provisioned and online after ~$((i * 3))s"; break
+  fi
+  [ "$i" = 40 ] && echo "WARNING: emulator network not validated after 120s (web pages may not load)"
+  sleep 3
+done
 adb logcat -c
 # Keep a running copy of logcat on the host so it survives an emulator crash.
 (adb logcat -v time > "$OUT/logcat-stream.txt" 2>&1 &)
