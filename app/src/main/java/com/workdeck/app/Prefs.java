@@ -99,6 +99,21 @@ public final class Prefs {
     public boolean notificationsEnabled(Site s) { return sp.getBoolean("notify_" + s.key, true); }
     public void setNotificationsEnabled(Site s, boolean v) { sp.edit().putBoolean("notify_" + s.key, v).apply(); }
 
+    /** Links from Teams/Outlook open as tabs of the account (true) or in the phone's browser. */
+    public boolean linksInApp() { return sp.getBoolean("links_in_app", true); }
+    public void setLinksInApp(boolean v) { sp.edit().putBoolean("links_in_app", v).apply(); }
+
+    /**
+     * Sound for new-message notifications of a site: a content URI, "" = the phone's
+     * default notification sound, "none" = silent.
+     */
+    public String notificationSound(Site s) { return sp.getString("sound_" + s.key, ""); }
+    public void setNotificationSound(Site s, String v) { sp.edit().putString("sound_" + s.key, v == null ? "" : v).apply(); }
+
+    /** Loudness of WorkDeck's message sounds, in percent of the sound file (100-400). */
+    public int soundBoost() { return sp.getInt("sound_boost", 300); }
+    public void setSoundBoost(int v) { sp.edit().putInt("sound_boost", Math.max(100, Math.min(400, v))).apply(); }
+
     // ---- advanced ----
     public boolean swShim() { return sp.getBoolean("sw_shim", true); }
     public void setSwShim(boolean v) { sp.edit().putBoolean("sw_shim", v).apply(); }

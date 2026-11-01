@@ -157,7 +157,9 @@ async function connectAll() {
   await teams.eval(`new Notification('WorkDeck CI message', { body: 'Hello from the CI test', tag: 'ci-msg' }), 'ok'`);
   const shown = await waitFor(() => wdNotifs().some((r) => r.includes('WorkDeck CI message')), 10000);
   check(shown, 'page notification shows as an Android notification');
-  check(wdNotifs().some((r) => r.includes('WorkDeck CI message') && r.includes('channel=teams')), 'posted on the "Teams messages" channel');
+  check(wdNotifs().some((r) => r.includes('WorkDeck CI message') && r.includes('channel=teams_messages')), 'posted on the "Teams messages" channel');
+  const soundLog = sh('adb logcat -d -s WorkDeck/Sound');
+  check(/playing message sound at 300%/.test(soundLog), 'WorkDeck plays the message sound itself, at 300% loudness', (soundLog.match(/playing[^\n]*/) || [''])[0]);
   if (!shown) diag('page notification');
   let n;
 
@@ -345,7 +347,7 @@ async function connectAll() {
     const mailShown = await waitFor(() => wdNotifs().some((r) => r.includes('3 unread in Outlook')), 15000);
     check(mailShown, 'new Outlook mail (Inbox unread count up) posts an Android notification');
     const rec = wdNotifs().find((r) => r.includes('3 unread in Outlook')) || '';
-    check(rec.includes('channel=outlook'), 'posted on the "Outlook mail" channel');
+    check(rec.includes('channel=outlook_mail'), 'posted on the "Outlook mail" channel');
     check(rec.includes('CI Sender'), 'notification names the sender of the newest mail');
     if (!mailShown) diag('outlook new mail');
     shot('07-outlook-mail');
@@ -397,6 +399,79 @@ async function connectAll() {
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
   await sleep(2500);
   await openApp('CRAFTWW', 'Teams');
+
+  // 9. A link clicked in Teams opens as a tab of the same account, with × to close it
+  const texts = () => sh('python3 scripts/ci/ui.py texts');
+  const craft = (await connectAll()).filter((x) => x.acct === 'CRAFTWW' && isTeams(x.p));
+  const ct = craft[0];
+  for (const x of craft.slice(1)) x.c.close();
+  if (!ct) {
+    check(false, 'CRAFTWW Teams page reachable for the link-tab test');
+  } else {
+    await ct.c.send('Runtime.evaluate', { expression: "window.open('https://example.com/?wdci=link', '_blank'), 'ok'", userGesture: true });
+    const linkOpen = await waitFor(() => false, 6000) || (await pages()).some((p) => /example\.com/.test(p.url));
+    check(linkOpen, 'a link clicked in Teams opens as a new tab (same account)');
+    const scr = texts();
+    check(/Close this tab/.test(scr) && /CRAFTWW\s+·\s+example\.com/.test(scr), 'the link tab shows its page and a × to close it',
+      scr.split('\n').filter((l) => /Close|example|CRAFTWW/.test(l)).join(' | '));
+    shot('09-link-tab');
+    ui('tap "=CRAFTWW"');
+    await sleep(1500);
+    const drop = texts();
+    check(/New tab/.test(drop) && /Close (Example Domain|example\.com)/.test(drop) && /^Teams/m.test(drop),
+      'the CRAFTWW drop-up lists Teams, Outlook and the link tab (with ×), plus "New tab…"', drop.split('\n').slice(0, 8).join(' | '));
+    shot('09-dropup-with-link');
+    ui('tap "^Close "');
+    await sleep(3000);
+    const closed = !(await pages()).some((p) => /example\.com/.test(p.url));
+    check(closed && !/Close this tab/.test(texts()), '× closes the link tab and goes back to Teams');
+
+    // 10. Phone files and text shared to WorkDeck land in the message box
+    const CHAT = 'https://teams.microsoft.com/wd-ci-chat';
+    const chatHtml = `<!doctype html><html><head><title>Chat | Microsoft Teams</title></head><body>
+      <div id="files"></div><div id="pane" style="position:fixed;bottom:0;left:0;right:0;height:120px">
+      <div id="box" contenteditable="true" role="textbox" aria-label="Type a message" style="height:80px;border:1px solid #888"></div></div>
+      <script>window.__got = []; const pane = document.getElementById('pane');
+        pane.addEventListener('dragover', (e) => e.preventDefault());
+        pane.addEventListener('drop', (e) => { e.preventDefault(); [...e.dataTransfer.files].forEach(async (f) => {
+          window.__got.push(f.name + ':' + (await f.text()).trim()); const d = document.createElement('div'); d.textContent = f.name;
+          document.getElementById('files').appendChild(d); }); });</script></body></html>`;
+    await ct.c.send('Fetch.enable', { patterns: [{ urlPattern: CHAT + '*', requestStage: 'Request' }] });
+    ct.c.on('Fetch.requestPaused', (p) => ct.c.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }], body: Buffer.from(chatHtml).toString('base64') }));
+    await ct.c.send('Page.navigate', { url: CHAT });
+    await sleep(4000);
+    await ct.c.eval("document.getElementById('box').focus(), 'ok'", 8000);
+    await sleep(2000);
+    check(/Attach files from phone/.test(texts()), 'typing in a message box shows WorkDeck\'s attach (📎) button');
+    shot('10-attach-button');
+    sh(`adb shell "run-as ${PKG} sh -c 'mkdir -p cache; echo quarterly-numbers > cache/ci-report.txt'"`);
+    sh(`adb shell am start -n ${PKG}/.ui.ShareActivity -a android.intent.action.SEND -t text/plain --eu android.intent.extra.STREAM file:///data/user/0/${PKG}/cache/ci-report.txt`);
+    await sleep(2500);
+    shot('10-share-dialog');
+    ui('tap "^CRAFTWW · Teams"');
+    let got = '';
+    await waitFor(() => false, 1);
+    for (let i = 0; i < 12; i++) {
+      await sleep(1000);
+      got = String(await ct.c.eval('JSON.stringify(window.__got || [])', 5000));
+      if (/ci-report/.test(got)) break;
+    }
+    check(/ci-report\.txt:quarterly-numbers/.test(got), 'a file shared to WorkDeck (Share → CRAFTWW · Teams) is attached in the message box', got);
+    shot('10-attached');
+    sh(`adb shell am start -n ${PKG}/.ui.ShareActivity -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "WorkDeck-CI-shared-text"`);
+    await sleep(2500);
+    ui('tap "^CRAFTWW · Teams"');
+    let boxText = '';
+    for (let i = 0; i < 10; i++) {
+      await sleep(1000);
+      boxText = String(await ct.c.eval("document.getElementById('box') ? document.getElementById('box').textContent : ''", 5000));
+      if (/WorkDeck-CI-shared-text/.test(boxText)) break;
+    }
+    check(/WorkDeck-CI-shared-text/.test(boxText), 'shared text is typed into the message box', boxText.slice(0, 80));
+    await ct.c.send('Fetch.disable');
+    ct.c.close();
+  }
 
   console.log(failures ? `\n${failures} WebView check(s) FAILED` : '\nall WebView checks passed');
   process.exit(failures ? 1 : 0);

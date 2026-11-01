@@ -60,6 +60,8 @@ final class MediaInfo {
             JSONArray routes = new JSONArray();
             for (CallManager.Route r : CallManager.get(c).availableRoutes()) routes.put(r.name().toLowerCase(Locale.ROOT));
             o.put("routes", routes);
+            String bt = CallManager.get(c).bluetoothName();
+            if (bt != null) o.put("btName", bt);
             CallManager.Route cur = CallManager.get(c).route();
             o.put("route", cur == null ? "" : cur.name().toLowerCase(Locale.ROOT));
             return o.toString();

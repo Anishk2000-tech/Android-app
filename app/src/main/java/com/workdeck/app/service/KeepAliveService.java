@@ -361,6 +361,8 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
             tabs.startBackground();
             tabs.retryFailed();
             tabs.autoRefreshIfStale(UiState.activityVisible);
+            // Link tabs nobody looked at for 45 minutes give their memory back.
+            tabs.trimIdleWebTabs(UiState.visibleTab, 45L * 60 * 1000);
             tabs.flushCookies();
             mMain.postDelayed(this, WATCHDOG_MS);
         }

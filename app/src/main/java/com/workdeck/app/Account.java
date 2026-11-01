@@ -1,9 +1,12 @@
 package com.workdeck.app;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -27,6 +30,27 @@ public final class Account {
     public Site lastSite = Site.TEAMS;
 
     private final Map<Site, SiteSettings> mSites = new EnumMap<>(Site.class);
+    /** Extra tabs (links opened from this account), in the order they were opened. */
+    private final List<WebTab> mWebTabs = new ArrayList<>();
+    private int mNextWebId = 1;
+    /** Most extra tabs an account keeps; opening more closes the oldest. */
+    public static final int MAX_WEB_TABS = 10;
+
+    /** A link opened in this account (shown in its drop-up until closed with ×). */
+    public static final class WebTab {
+        public final String id;
+        public String url;
+        public String title;
+        public boolean desktop;
+        public int textZoom = 100;
+
+        WebTab(String id, String url, String title, boolean desktop) {
+            this.id = id;
+            this.url = url;
+            this.title = title == null ? "" : title;
+            this.desktop = desktop;
+        }
+    }
 
     static final class SiteSettings {
         boolean enabled = true;
@@ -54,6 +78,43 @@ public final class Account {
         return id + "|" + s.key;
     }
 
+    public String webKey(String webId) {
+        return id + "|w" + webId;
+    }
+
+    // ---- extra (link) tabs ----
+    public List<WebTab> webTabs() {
+        return new ArrayList<>(mWebTabs);
+    }
+
+    public WebTab webTab(String webId) {
+        if (webId == null) return null;
+        for (WebTab w : mWebTabs) if (w.id.equals(webId)) return w;
+        return null;
+    }
+
+    public WebTab addWebTab(String url, boolean desktop) {
+        WebTab w = new WebTab(String.valueOf(mNextWebId++), url, "", desktop);
+        mWebTabs.add(w);
+        return w;
+    }
+
+    public void removeWebTab(String webId) {
+        WebTab w = webTab(webId);
+        if (w != null) mWebTabs.remove(w);
+    }
+
+    /** Oldest extra tab, closed first when the account has too many. */
+    public WebTab oldestWebTab() {
+        return mWebTabs.isEmpty() ? null : mWebTabs.get(0);
+    }
+
+    /** Moves an extra tab to the end (most recently used). */
+    public void touchWebTab(String webId) {
+        WebTab w = webTab(webId);
+        if (w != null && mWebTabs.remove(w)) mWebTabs.add(w);
+    }
+
     public int colorValue() {
         return COLORS[Math.abs(color) % COLORS.length];
     }
@@ -63,7 +124,7 @@ public final class Account {
     }
 
     // ---- per-site settings ----
-    public boolean siteEnabled(Site s) { return site(s).enabled; }
+    public boolean siteEnabled(Site s) { return s != null && site(s).enabled; }
     public void setSiteEnabled(Site s, boolean v) { site(s).enabled = v; }
 
     public boolean isDesktop(Site s) { return Prefs.VIEW_DESKTOP.equals(site(s).view); }
@@ -72,7 +133,7 @@ public final class Account {
     public int textZoom(Site s) { return site(s).textZoom; }
     public void setTextZoom(Site s, int v) { site(s).textZoom = v; }
 
-    public boolean notificationsEnabled(Site s) { return site(s).notify; }
+    public boolean notificationsEnabled(Site s) { return s != null && site(s).notify; }
     public void setNotificationsEnabled(Site s, boolean v) { site(s).notify = v; }
 
     public String customUrl(Site s) { return site(s).customUrl; }
@@ -109,6 +170,12 @@ public final class Account {
                     .put("opened", ss.opened));
         }
         o.put("sites", sites);
+        JSONArray web = new JSONArray();
+        for (WebTab w : mWebTabs) {
+            web.put(new JSONObject().put("id", w.id).put("url", w.url).put("title", w.title)
+                    .put("desktop", w.desktop).put("textZoom", w.textZoom));
+        }
+        o.put("webTabs", web).put("nextWebId", mNextWebId);
         return o;
     }
 
@@ -130,6 +197,22 @@ public final class Account {
             ss.notify = so.optBoolean("notify", true);
             ss.customUrl = so.optString("customUrl", "");
             ss.opened = so.optBoolean("opened", false);
+        }
+        JSONArray web = o.optJSONArray("webTabs");
+        for (int i = 0; web != null && i < web.length(); i++) {
+            JSONObject wo = web.optJSONObject(i);
+            if (wo == null || wo.optString("url").isEmpty()) continue;
+            WebTab w = new WebTab(wo.optString("id", String.valueOf(i + 1)), wo.optString("url"),
+                    wo.optString("title"), wo.optBoolean("desktop", false));
+            w.textZoom = wo.optInt("textZoom", 100);
+            a.mWebTabs.add(w);
+        }
+        a.mNextWebId = Math.max(o.optInt("nextWebId", 1), a.mWebTabs.size() + 1);
+        for (WebTab w : a.mWebTabs) {
+            try {
+                a.mNextWebId = Math.max(a.mNextWebId, Integer.parseInt(w.id) + 1);
+            } catch (NumberFormatException ignored) {
+            }
         }
         return a;
     }

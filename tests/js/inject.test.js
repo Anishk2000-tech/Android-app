@@ -46,6 +46,17 @@ const BRIDGE_MOCK = `
     mediaInfo(t) { return t === '${TOKEN}' ? JSON.stringify(window.__media) : ''; },
     setRoute(t, r) { this._rec('setRoute', arguments); },
     looking(t) { return window.__looking || '0'; },
+    setMic(t, m) { this._rec('setMic', arguments); },
+    composeFocus(t, st) { this._rec('composeFocus', arguments); },
+    attachDone(t, method, n, seen) { this._rec('attachDone', arguments); },
+    attachRead(t, id, off) {
+      const f = (window.__attachData || {})[id];
+      if (!f) return null;
+      const o = Number(off);
+      if (o >= f.length) return '';
+      const part = f.slice(o, o + 5); // tiny chunks: exercises the chunked reader
+      return btoa(part);
+    },
     callSignal(t, type, detail) { this._rec('callSignal', arguments); },
     log(t, m) { this._rec('log', arguments); },
   };
@@ -480,13 +491,42 @@ test('enumerateDevices lists phone mic, front/back cameras and Android audio rou
     return { out, types, locked };
   });
   assert.deepStrictEqual(r.out, [
-    'audioinput|default|Phone microphone', 'videoinput|wd-camera-front|Front camera', 'videoinput|wd-camera-back|Back camera',
+    'audioinput|default|Automatic (Bluetooth or headset when connected)', 'audioinput|wd-mic-phone|Phone microphone',
+    'audioinput|wd-mic-bluetooth|Bluetooth headset microphone',
+    'videoinput|wd-camera-front|Front camera', 'videoinput|wd-camera-back|Back camera',
     'audiooutput|default|Automatic (phone chooses)', 'audiooutput|wd-route-speaker|Phone speaker (loud)',
     'audiooutput|wd-route-earpiece|Phone earpiece', 'audiooutput|wd-route-bluetooth|Bluetooth']);
   assert.strictEqual(r.types.mdi, true);
-  assert.ok(r.types.json.includes('"label":"Phone microphone"'));
+  assert.ok(r.types.json.includes('"label":"Automatic (Bluetooth or headset when connected)"'));
   assert.strictEqual(r.types.caps, 'function');
   assert.deepStrictEqual(r.locked, ['audioinput||', 'videoinput||', 'audiooutput||'], 'before permission: ids/labels hidden like a browser');
+  await ctx.close();
+});
+
+test('Bluetooth / headset microphones are offered and picking one routes Android call audio', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    window.__media.routes = ['speaker', 'earpiece', 'wired', 'bluetooth'];
+    window.__media.btName = 'Galaxy Buds2';
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const mics = list.filter((d) => d.kind === 'audioinput').map((d) => d.deviceId + '|' + d.label + '|' + d.groupId);
+    const outs = list.filter((d) => d.kind === 'audiooutput').map((d) => d.deviceId + '|' + d.label + '|' + d.groupId);
+    const s = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'wd-mic-bluetooth' } } });
+    const t = s.getAudioTracks()[0];
+    const picked = { id: t.getSettings().deviceId, label: t.label };
+    s.getTracks().forEach((x) => x.stop());
+    const s2 = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: 'wd-mic-phone' } });
+    s2.getTracks().forEach((x) => x.stop());
+    const s3 = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s3.getTracks().forEach((x) => x.stop());
+    return { mics, outs, picked, setMic: window.__calls.filter((c) => c.name === 'setMic').map((c) => c.args[1]) };
+  });
+  assert.deepStrictEqual(r.mics, [
+    'default|Automatic (Bluetooth or headset when connected)|wd-phone', 'wd-mic-phone|Phone microphone|wd-phone',
+    'wd-mic-bluetooth|Bluetooth: Galaxy Buds2|wd-route-bluetooth', 'wd-mic-wired|Headset microphone|wd-route-wired']);
+  assert.ok(r.outs.includes('wd-route-bluetooth|Bluetooth: Galaxy Buds2|wd-route-bluetooth'), 'mic and speaker of a headset share a group');
+  assert.deepStrictEqual(r.picked, { id: 'wd-mic-bluetooth', label: 'Bluetooth: Galaxy Buds2' });
+  assert.deepStrictEqual(r.setMic, ['bluetooth', 'phone'], 'plain getUserMedia({audio:true}) must not change the route');
   await ctx.close();
 });
 
@@ -497,7 +537,8 @@ test('real, labelled devices (desktop-like engines) are passed through, plus And
     const list = await navigator.mediaDevices.enumerateDevices();
     return list.map((d) => d.kind + '|' + (d.deviceId.startsWith('wd-') || d.deviceId === 'default' ? d.deviceId : 'real') + '|' + !!d.label);
   });
-  assert.ok(r.some((x) => /^audioinput\|(real|default)\|true$/.test(x)), JSON.stringify(r));
+  assert.ok(r.includes('audioinput|wd-mic-phone|true'), JSON.stringify(r));
+  assert.ok(r.some((x) => /^videoinput\|(real|wd-camera-front)\|true$/.test(x)), JSON.stringify(r));
   assert.ok(r.includes('audiooutput|wd-route-earpiece|true'), JSON.stringify(r));
   await ctx.close();
 });
@@ -650,6 +691,96 @@ test('Outlook unread scraper stays off in Teams and when the page badges itself'
   });
   await o.ctx.close();
   assert.deepStrictEqual(badged, ['mailUnread:3', 'badge:7']);
+});
+
+const COMPOSE_PAGE = (handler) => `<!doctype html><html><head><title>Chat | Teams</title></head><body>
+  <div id="list"></div>
+  <div id="pane"><div id="box" contenteditable="true" role="textbox" aria-label="Type a message"></div></div>
+  <script>
+    window.__got = [];
+    const show = (files) => Promise.all([...files].map(async (f) => {
+      window.__got.push({ name: f.name, type: f.type, text: await f.text() });
+      const chip = document.createElement('div'); chip.textContent = f.name; document.getElementById('list').appendChild(chip);
+    }));
+    ${handler}
+  </script></body></html>`;
+
+test('attach: phone files are dropped into the message box (Teams/Outlook take dropped files)', async (b, base) => {
+  PAGES['/compose-drop.html'] = COMPOSE_PAGE(`document.getElementById('pane').addEventListener('drop', (e) => { e.preventDefault(); show(e.dataTransfer.files); });
+    document.getElementById('pane').addEventListener('dragover', (e) => e.preventDefault());`);
+  const { ctx, page, errors } = await newPage(b, base, {}, '/compose-drop.html');
+  const r = await page.evaluate(async () => {
+    window.__attachData = { a1: 'hello report contents', b2: '%PDF-1.4 fake' };
+    document.getElementById('box').focus();
+    window.__wdAttach(JSON.stringify([{ id: 'a1', name: 'report-q3.txt', type: 'text/plain', size: 21 },
+      { id: 'b2', name: 'contract.pdf', type: 'application/pdf', size: 13 }]));
+    for (let i = 0; i < 40 && !window.__calls.some((c) => c.name === 'attachDone'); i++) await new Promise((res) => setTimeout(res, 100));
+    return { got: window.__got, done: window.__calls.filter((c) => c.name === 'attachDone').map((c) => c.args.slice(1).join(',')),
+      focus: window.__calls.filter((c) => c.name === 'composeFocus').map((c) => c.args[1]) };
+  });
+  assert.deepStrictEqual(r.got, [{ name: 'report-q3.txt', type: 'text/plain', text: 'hello report contents' },
+    { name: 'contract.pdf', type: 'application/pdf', text: '%PDF-1.4 fake' }]);
+  assert.deepStrictEqual(r.done, ['drop,2,1']);
+  assert.deepStrictEqual(r.focus, ['1'], 'typing in the message box tells WorkDeck to show its attach button');
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('attach: falls back to paste, then to the page\'s file input; reports when there is no message box', async (b, base) => {
+  PAGES['/compose-paste.html'] = COMPOSE_PAGE(`document.getElementById('box').addEventListener('paste', (e) => { e.preventDefault(); show(e.clipboardData.files); });`);
+  PAGES['/compose-input.html'] = `<!doctype html><html><body><div id="list"></div>
+    <input type="file" id="up" multiple style="display:none">
+    <script>window.__got = []; document.getElementById('up').addEventListener('change', (e) => {
+      [...e.target.files].forEach((f) => { window.__got.push(f.name); const d = document.createElement('div'); d.textContent = f.name; document.getElementById('list').appendChild(d); });
+    });</script></body></html>`;
+  PAGES['/compose-none.html'] = '<!doctype html><html><body><p>nothing to attach to</p></body></html>';
+  const run = async (file) => {
+    const { ctx, page } = await newPage(b, base, {}, file);
+    const r = await page.evaluate(async () => {
+      window.__attachData = { x: 'photo-bytes' };
+      window.__wdAttach(JSON.stringify([{ id: 'x', name: 'holiday-photo.jpg', type: 'image/jpeg', size: 11 }]));
+      for (let i = 0; i < 50 && !window.__calls.some((c) => c.name === 'attachDone'); i++) await new Promise((res) => setTimeout(res, 100));
+      return { got: (window.__got || []).map((g) => g.name || g), done: window.__calls.filter((c) => c.name === 'attachDone').map((c) => c.args.slice(1).join(',')) };
+    });
+    await ctx.close();
+    return r;
+  };
+  const paste = await run('/compose-paste.html');
+  assert.deepStrictEqual(paste, { got: ['holiday-photo.jpg'], done: ['paste,1,1'] });
+  const input = await run('/compose-input.html');
+  assert.deepStrictEqual(input, { got: ['holiday-photo.jpg'], done: ['input,1,1'] });
+  const none = await run('/compose-none.html');
+  assert.deepStrictEqual(none, { got: [], done: ['none,1,0'] });
+});
+
+test('shared text is typed into the message box', async (b, base) => {
+  PAGES['/compose-text.html'] = COMPOSE_PAGE('');
+  const { ctx, page } = await newPage(b, base, {}, '/compose-text.html');
+  const r = await page.evaluate(() => { window.__wdInsertText('Minutes from today: https://example.com/x'); return document.getElementById('box').textContent; });
+  assert.strictEqual(r, 'Minutes from today: https://example.com/x');
+  await ctx.close();
+});
+
+test('showOpenFilePicker (missing in Android WebView) opens the normal file chooser', async (b, base) => {
+  PAGES['/picker.html'] = `<!doctype html><html><body><button id="go">pick</button><script>
+    document.getElementById('go').addEventListener('click', async () => {
+      try {
+        const [h] = await window.showOpenFilePicker({ types: [{ accept: { 'application/pdf': ['.pdf'] } }] });
+        const f = await h.getFile(); window.__picked = h.kind + ':' + h.name + ':' + (await f.text());
+      } catch (e) { window.__picked = 'error:' + e.name; }
+    });</script></body></html>`;
+  // Android WebView has no showOpenFilePicker; desktop Chromium does, so remove it first.
+  const ctx = await b.newContext();
+  await ctx.addInitScript('delete window.showOpenFilePicker;');
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/picker.html');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#go')]);
+  await chooser.setFiles({ name: 'minutes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('pdf-bytes') });
+  await page.waitForFunction(() => window.__picked);
+  assert.strictEqual(await page.evaluate(() => window.__picked), 'file:minutes.pdf:pdf-bytes');
+  await ctx.close();
 });
 
 (async () => {

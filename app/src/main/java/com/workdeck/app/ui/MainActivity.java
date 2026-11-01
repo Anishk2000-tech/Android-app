@@ -75,8 +75,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     public static final String EXTRA_SITE = "site";
     public static final String EXTRA_ACCOUNT = "account";
     public static final String EXTRA_NOTIFICATION_ID = "notification_id";
+    /** Files shared to WorkDeck from another app (copied into the cache by ShareActivity). */
+    public static final String ACTION_ATTACH = "com.workdeck.app.ATTACH";
+    public static final String EXTRA_FILES = "files";
+    public static final String EXTRA_NAMES = "names";
+    public static final String EXTRA_MIMES = "mimes";
+    public static final String EXTRA_TEXT = "text";
 
     private static final int REQ_FILE = 100;
+    private static final int REQ_ATTACH = 101;
 
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private Prefs mPrefs;
@@ -85,6 +92,19 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private CallManager mCall;
     private Account mAccount;
     private Site mSite;
+    /** Id of the account's link tab on screen, or null when Teams/Outlook is shown. */
+    private String mWebId;
+    /** Link tab key -> key of the tab whose link opened it (Back returns there). */
+    private final Map<String, String> mOpenedFrom = new HashMap<>();
+    private View mTabHeader;
+    private TextView mTabTitle;
+    private TextView mTabHost;
+    private ImageButton mBtnAttach;
+    /** Files waiting for a message box to be opened in the tab with this key. */
+    private List<com.workdeck.app.web.Attachments.Item> mPendingAttach;
+    private String mPendingAttachKey;
+    private String mPendingText;
+    private String mAttachTargetKey;
 
     private View mContent;
     private FrameLayout mWebContainer;
@@ -182,6 +202,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             recreate();
             return;
         }
+        if (mWebId != null && mAccount.webTab(mWebId) == null) showTab(mAccount, mAccount.preferredSite());
         UiState.activityResumed = true;
         UiState.visibleTab = currentKey();
         if (mPrefs.keepAlive() || mCall.inCall()) {
@@ -267,6 +288,36 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         mFullscreen = findViewById(R.id.fullscreen_container);
         mChipScroll = findViewById(R.id.account_scroll);
         mChips = findViewById(R.id.account_chips);
+        mBtnAttach = findViewById(R.id.btn_attach);
+        mBtnAttach.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                pickFilesToAttach();
+            }
+        });
+        mTabHeader = findViewById(R.id.tab_header);
+        mTabTitle = findViewById(R.id.tab_title);
+        mTabHost = findViewById(R.id.tab_host);
+        findViewById(R.id.tab_close).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mAccount != null && mWebId != null) closeWebTab(mAccount, mWebId);
+            }
+        });
+        findViewById(R.id.tab_reload).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                BrowserTab t = currentTab();
+                if (t != null) t.reload();
+            }
+        });
+        findViewById(R.id.tab_external).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                BrowserTab t = currentTab();
+                if (t != null && t.currentUrl() != null) t.openExternal(t.currentUrl());
+            }
+        });
         findViewById(R.id.btn_add_account).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -424,11 +475,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     }
 
     private BrowserTab currentTab() {
-        return mAccount == null || mSite == null || mTabs == null ? null : mTabs.tab(mAccount, mSite);
+        if (mAccount == null || mTabs == null) return null;
+        if (mWebId != null) return mTabs.webTab(mAccount, mAccount.webTab(mWebId));
+        return mSite == null ? null : mTabs.tab(mAccount, mSite);
     }
 
     private String currentKey() {
-        return mAccount == null || mSite == null ? null : mAccount.key(mSite);
+        if (mAccount == null) return null;
+        if (mWebId != null) return mAccount.webKey(mWebId);
+        return mSite == null ? null : mAccount.key(mSite);
     }
 
     private void clearNotificationsOfCurrent() {
@@ -451,6 +506,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         for (Site o : Site.values()) if (a.wasOpened(o)) firstOpen = false;
         mAccount = a;
         mSite = s;
+        mWebId = null;
         a.lastSite = s;
         a.markOpened(s);
         if (firstOpen) {
@@ -466,6 +522,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         mAccounts.setActive(a);
         mAccounts.save();
+        becameVisible(tab);
+        scrollChipIntoView(a);
+    }
+
+    private void becameVisible(BrowserTab tab) {
+        tab.markShown();
         UiState.visibleTab = tab.key;
         for (BrowserTab t : mTabs.allTabs()) {
             if (t.webView() != null) t.webView().setVisibility(t == tab ? View.VISIBLE : View.GONE);
@@ -473,7 +535,238 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (UiState.activityResumed) clearNotificationsOfCurrent();
         updatePopupPanel();
         refreshUi();
+    }
+
+    // ------------------------------------------------------------------ attaching phone files
+
+    private void pickFilesToAttach() {
+        BrowserTab t = currentTab();
+        if (t == null) return;
+        mAttachTargetKey = t.key;
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*")
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try {
+            startActivityForResult(Intent.createChooser(i, getString(R.string.attach_pick_title)), REQ_ATTACH);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, R.string.attach_no_picker, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static List<Uri> urisOf(Intent data) {
+        List<Uri> out = new ArrayList<>();
+        if (data == null) return out;
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                if (clip.getItemAt(i).getUri() != null) out.add(clip.getItemAt(i).getUri());
+            }
+        } else if (data.getData() != null) {
+            out.add(data.getData());
+        }
+        return out;
+    }
+
+    private void attachTo(BrowserTab t, List<com.workdeck.app.web.Attachments.Item> items) {
+        if (t == null || items.isEmpty()) return;
+        Toast.makeText(this, getResources().getQuantityString(R.plurals.attach_adding, items.size(), items.size()),
+                Toast.LENGTH_SHORT).show();
+        mPendingAttach = items;
+        mPendingAttachKey = t.key;
+        t.attach(items);
+    }
+
+    /** Files were waiting for a message box: the user just tapped one. */
+    private void deliverPending(final BrowserTab t) {
+        if (mPendingAttach == null && mPendingText == null) return;
+        final List<com.workdeck.app.web.Attachments.Item> items = mPendingAttach;
+        final String text = mPendingText;
+        mPendingText = null;
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (text != null) t.insertText(text);
+                if (items != null) attachTo(t, items);
+            }
+        }, 400);
+        mPendingAttach = null;
+    }
+
+    @Override
+    public void onAttachResult(BrowserTab tab, String method, int count, boolean seen) {
+        if ("none".equals(method)) {
+            // No message box open yet: keep the files until the user taps one.
+            Toast.makeText(this, R.string.attach_open_box, Toast.LENGTH_LONG).show();
+            refreshUi();
+            return;
+        }
+        mPendingAttach = null;
+        mPendingAttachKey = null;
+        if ("readfailed".equals(method)) {
+            Toast.makeText(this, R.string.attach_read_failed, Toast.LENGTH_LONG).show();
+        } else if ("unavailable".equals(method)) {
+            Toast.makeText(this, R.string.attach_unavailable, Toast.LENGTH_LONG).show();
+        } else if (seen) {
+            Toast.makeText(this, getResources().getQuantityString(R.plurals.attach_done, count, count), Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, getResources().getQuantityString(R.plurals.attach_handed, count, count), Toast.LENGTH_LONG).show();
+        }
+        refreshUi();
+    }
+
+    /** Files (and/or text) shared to WorkDeck from another app. */
+    private void handleShared(Intent intent, Account account, Site site) {
+        String[] paths = intent.getStringArrayExtra(EXTRA_FILES);
+        String[] names = intent.getStringArrayExtra(EXTRA_NAMES);
+        String[] mimes = intent.getStringArrayExtra(EXTRA_MIMES);
+        String text = intent.getStringExtra(EXTRA_TEXT);
+        showTab(account, site);
+        final BrowserTab t = currentTab();
+        if (t == null) return;
+        final List<com.workdeck.app.web.Attachments.Item> items = new ArrayList<>();
+        for (int i = 0; paths != null && i < paths.length; i++) {
+            java.io.File f = new java.io.File(paths[i]);
+            if (!f.exists()) continue;
+            items.add(com.workdeck.app.web.Attachments.add(f, names != null && i < names.length ? names[i] : f.getName(),
+                    mimes != null && i < mimes.length ? mimes[i] : null));
+        }
+        mPendingAttach = items.isEmpty() ? null : items;
+        mPendingAttachKey = t.key;
+        mPendingText = text == null || text.trim().isEmpty() ? null : text;
+        if (mPendingAttach == null && mPendingText == null) return;
+        // Give a page that was just opened a moment; otherwise the files wait for the message box.
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (t.key.equals(mPendingAttachKey)) deliverPending(t);
+            }
+        }, t.progress() >= 100 ? 600 : 4000);
+        Toast.makeText(this, R.string.attach_shared_hint, Toast.LENGTH_LONG).show();
+        refreshUi();
+    }
+
+    // ------------------------------------------------------------------ link tabs
+
+    /** Shows one of an account's link tabs. */
+    private void showWebTab(Account a, String webId) {
+        Account.WebTab w = a == null ? null : a.webTab(webId);
+        if (w == null) return;
+        BrowserTab tab = mTabs.webTab(a, w);
+        tab.ensureStarted();
+        tab.attach(mWebContainer);
+        mAccount = a;
+        mWebId = webId;
+        mAccounts.setActive(a);
+        mAccounts.save();
+        becameVisible(tab);
         scrollChipIntoView(a);
+    }
+
+    /** Opens a URL as a new link tab of the account and shows it. */
+    private void openNewTab(Account a, String url, BrowserTab from) {
+        if (a == null || url == null || url.isEmpty()) return;
+        BrowserTab t = mTabs.openWebTab(a, url);
+        if (from != null) mOpenedFrom.put(t.key, from.key);
+        t.ensureStarted();
+        showWebTab(a, t.web.id);
+    }
+
+    @Override
+    public void openLink(BrowserTab from, String url) {
+        openNewTab(from.account, url, from);
+    }
+
+    /** The × of a link tab: close it and go back to where it was opened from. */
+    private void closeWebTab(Account a, String webId) {
+        String key = a.webKey(webId);
+        boolean wasShown = key.equals(currentKey());
+        String from = mOpenedFrom.remove(key);
+        mTabs.closeWebTab(a, webId);
+        if (!wasShown) {
+            refreshUi();
+            return;
+        }
+        returnFromWebTab(a, from);
+    }
+
+    private void returnFromWebTab(Account a, String fromKey) {
+        BrowserTab from = fromKey == null ? null : mTabs.existing(fromKey);
+        if (from != null && from.account.id.equals(a.id)) {
+            if (from.isWeb()) showWebTab(a, from.web.id);
+            else showTab(a, from.site);
+        } else {
+            showTab(a, a.preferredSite());
+        }
+    }
+
+    private void showNewTabDialog(final Account a) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = Ui.dp(this, 20);
+        box.setPadding(pad, Ui.dp(this, 8), pad, 0);
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint(R.string.new_tab_hint);
+        input.setSingleLine(true);
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);
+        box.addView(input);
+        final AlertDialog[] dlg = new AlertDialog[1];
+        String[][] quick = a.isPersonal()
+                ? new String[][] {{getString(R.string.quick_m365), "https://www.microsoft365.com/"},
+                        {getString(R.string.quick_onedrive), "https://onedrive.live.com/"},
+                        {getString(R.string.quick_calendar), "https://outlook.live.com/calendar/"}}
+                : new String[][] {{getString(R.string.quick_m365), "https://www.microsoft365.com/"},
+                        {getString(R.string.quick_onedrive), "https://www.office.com/launch/onedrive"},
+                        {getString(R.string.quick_sharepoint), "https://www.office.com/launch/sharepoint"},
+                        {getString(R.string.quick_calendar), "https://outlook.office.com/calendar/"}};
+        TextView label = new TextView(this);
+        label.setText(R.string.new_tab_quick);
+        label.setTextColor(getColor(R.color.wd_text2));
+        label.setPadding(0, Ui.dp(this, 12), 0, Ui.dp(this, 4));
+        box.addView(label);
+        for (final String[] q : quick) {
+            TextView row = new TextView(this);
+            row.setText(q[0]);
+            row.setTextSize(16);
+            row.setTextColor(getColor(R.color.wd_primary));
+            row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (dlg[0] != null) dlg[0].dismiss();
+                    openTypedOrQuick(a, q[1]);
+                }
+            });
+            box.addView(row);
+        }
+        dlg[0] = new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.new_tab_title, a.name))
+                .setView(box)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.new_tab_open, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        openTypedOrQuick(a, UrlRouter.fromUserInput(input.getText().toString()));
+                    }
+                }).create();
+        input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override
+            public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent event) {
+                dlg[0].dismiss();
+                openTypedOrQuick(a, UrlRouter.fromUserInput(input.getText().toString()));
+                return true;
+            }
+        });
+        dlg[0].show();
+    }
+
+    /** Teams/Outlook addresses open in the account's Teams/Outlook; everything else in a new tab. */
+    private void openTypedOrQuick(Account a, String url) {
+        if (url == null || url.isEmpty()) return;
+        Site s = UrlRouter.siteFor(url);
+        if (s != null && a.siteEnabled(s)) openIn(a, s, url);
+        else openNewTab(a, url, currentTab());
     }
 
     private final BrowserTab.Listener mTabListener = new BrowserTab.Listener() {
@@ -535,47 +828,90 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         return t == null ? 0 : Math.max(0, t.unreadCount());
     }
 
-    /** The drop-up of an account: its Teams and Outlook (with unread counts) and its settings. */
+    private Drawable tinted(int res, int tint) {
+        Drawable d = getDrawable(res).mutate();
+        d.setTint(tint);
+        return d;
+    }
+
+    /**
+     * The drop-up of an account: its Teams and Outlook (with unread counts), the links
+     * opened in it (each with a × to close), "New tab" and its settings.
+     */
     private void showAccountMenu(final Account a, View anchor) {
-        PopupMenu pm = new PopupMenu(this, anchor);
-        Menu m = pm.getMenu();
         int accent = AccountDialogs.accent(this, a);
-        for (Site s : Site.values()) {
+        boolean thisAccount = mAccount != null && a.id.equals(mAccount.id);
+        List<DropUp.Item> items = DropUp.list();
+        for (final Site s : Site.values()) {
             if (!a.siteEnabled(s)) continue;
             int n = unread(a, s);
-            String title = getString(s.titleRes) + (n > 0 ? "  (" + (n > 99 ? "99+" : n) + ")" : "");
-            m.add(0, 10 + s.ordinal(), s.ordinal(), title).setIcon(siteIcon(s, accent));
-        }
-        m.setGroupCheckable(0, true, true);
-        MenuItem current = a == mAccount && mSite != null ? m.findItem(10 + mSite.ordinal()) : null;
-        if (current != null) current.setChecked(true);
-        m.add(1, 1, 10, getString(R.string.menu_account_settings, a.name));
-        if (Build.VERSION.SDK_INT >= 29) pm.setForceShowIcon(true);
-        pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
-                int id = item.getItemId();
-                if (id == 1) {
-                    startActivity(new Intent(MainActivity.this, AccountsActivity.class)
-                            .putExtra(AccountsActivity.EXTRA_ACCOUNT, a.id));
-                    return true;
-                }
-                for (Site s : Site.values()) {
-                    if (id == 10 + s.ordinal()) {
-                        if (a == mAccount && s == mSite) {
-                            // Picking the open app again closes any window on top of it.
-                            WebView top = currentPopup();
-                            if (top != null) closePopup(top);
-                        } else {
-                            showTab(a, s);
-                        }
-                        return true;
+            DropUp.Item it = new DropUp.Item();
+            it.icon = siteIcon(s, accent);
+            it.title = getString(s.titleRes) + (n > 0 ? "  (" + (n > 99 ? "99+" : n) + ")" : "");
+            it.checked = thisAccount && mWebId == null && s == mSite;
+            it.checkColor = accent;
+            it.onClick = new Runnable() {
+                @Override
+                public void run() {
+                    if (a == mAccount && mWebId == null && s == mSite) {
+                        // Picking the open app again closes any window on top of it.
+                        WebView top = currentPopup();
+                        if (top != null) closePopup(top);
+                    } else {
+                        showTab(a, s);
                     }
                 }
-                return false;
+            };
+            items.add(it);
+        }
+        boolean first = true;
+        for (final Account.WebTab w : a.webTabs()) {
+            final BrowserTab t = mTabs.webTab(a, w);
+            DropUp.Item it = new DropUp.Item();
+            it.icon = tinted(R.drawable.ic_globe, accent);
+            it.title = t.displayTitle();
+            it.checked = thisAccount && w.id.equals(mWebId);
+            it.checkColor = accent;
+            it.dividerBefore = first;
+            first = false;
+            it.onClick = new Runnable() {
+                @Override
+                public void run() {
+                    showWebTab(a, w.id);
+                }
+            };
+            it.onClose = new Runnable() {
+                @Override
+                public void run() {
+                    closeWebTab(a, w.id);
+                }
+            };
+            it.closeDescription = getString(R.string.desc_close_named, t.displayTitle());
+            items.add(it);
+        }
+        DropUp.Item newTab = new DropUp.Item();
+        newTab.icon = tinted(R.drawable.ic_add, getColor(R.color.wd_icon));
+        newTab.title = getString(R.string.menu_new_tab);
+        newTab.dividerBefore = true;
+        newTab.onClick = new Runnable() {
+            @Override
+            public void run() {
+                showNewTabDialog(a);
             }
-        });
-        pm.show();
+        };
+        items.add(newTab);
+        DropUp.Item settings = new DropUp.Item();
+        settings.icon = tinted(R.drawable.ic_tune, getColor(R.color.wd_icon));
+        settings.title = getString(R.string.menu_account_settings, a.name);
+        settings.onClick = new Runnable() {
+            @Override
+            public void run() {
+                startActivity(new Intent(MainActivity.this, AccountsActivity.class)
+                        .putExtra(AccountsActivity.EXTRA_ACCOUNT, a.id));
+            }
+        };
+        items.add(settings);
+        DropUp.show(this, anchor, items);
     }
 
     private void scrollChipIntoView(Account a) {
@@ -610,7 +946,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             name.setTextColor(accent);
             name.setAlpha(active ? 1f : 0.8f);
             ImageView icon = chip.findViewById(R.id.chip_icon);
-            if (active && mSite != null) {
+            if (active && mWebId != null) {
+                icon.setImageDrawable(tinted(R.drawable.ic_globe, accent));
+                icon.setVisibility(View.VISIBLE);
+            } else if (active && mSite != null) {
                 icon.setImageDrawable(siteIcon(mSite, accent));
                 icon.setVisibility(View.VISIBLE);
             } else {
@@ -639,6 +978,17 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             if (w.getParent() == null) t.attach(mWebContainer);
         }
         refreshChips();
+        if (cur != null && cur.isWeb() && !mInPip) {
+            mTabHeader.setVisibility(View.VISIBLE);
+            mTabTitle.setText(cur.displayTitle());
+            String url = cur.currentUrl() != null ? cur.currentUrl() : cur.web.url;
+            mTabHost.setText(mAccount.name + "  \u00b7  " + UrlRouter.host(url));
+        } else {
+            mTabHeader.setVisibility(View.GONE);
+        }
+        boolean composing = cur != null && (cur.composeFocused() || (mPendingAttach != null && cur.key.equals(mPendingAttachKey)));
+        mBtnAttach.setVisibility(composing && !mInPip ? View.VISIBLE : View.GONE);
+        if (cur != null && cur.composeFocused() && cur.key.equals(mPendingAttachKey)) deliverPending(cur);
         boolean popupShown = mPopupPanel.getVisibility() == View.VISIBLE;
         if (cur != null) {
             int p = cur.progress();
@@ -679,6 +1029,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         m.add(0, 3, 0, t != null && t.isDesktop() ? R.string.menu_switch_mobile : R.string.menu_switch_desktop);
         m.add(0, 4, 0, R.string.menu_hide_bar);
         m.add(0, 5, 0, R.string.menu_open_browser);
+        m.add(0, 12, 0, R.string.menu_attach);
+        m.add(0, 11, 0, R.string.menu_new_tab);
         m.add(0, 9, 0, R.string.menu_accounts);
         m.add(0, 10, 0, R.string.menu_add_account);
         m.add(0, 6, 0, R.string.menu_setup);
@@ -720,6 +1072,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                         return true;
                     case 10:
                         addAccount();
+                        return true;
+                    case 11:
+                        if (mAccount != null) showNewTabDialog(mAccount);
+                        return true;
+                    case 12:
+                        pickFilesToAttach();
                         return true;
                     default:
                         return false;
@@ -775,6 +1133,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                     }
                 }, 500);
             }
+        } else if (ACTION_ATTACH.equals(action)) {
+            handleShared(intent, account, site != null ? site : account.preferredSite());
         } else if (Intent.ACTION_VIEW.equals(action) && intent.getData() != null) {
             openExternalLink(intent.getData().toString());
         }
@@ -792,9 +1152,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             }
             return;
         }
+        if (!UrlRouter.isHttp(url)) return;
         Site target = UrlRouter.siteFor(url);
-        if (target == null) target = mSite;
-        if (target != null && a.siteEnabled(target) && UrlRouter.isHttp(url)) openIn(a, target, url);
+        if (target != null && a.siteEnabled(target)) openIn(a, target, url);
+        else openNewTab(a, url, currentTab());
     }
 
     private void openIn(Account a, Site site, String url) {
@@ -823,6 +1184,9 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (mBtnAudio == null) return;
         mBtnAudio.setVisibility(inCall ? View.VISIBLE : View.GONE);
         mBtnAudio.setImageResource(routeIcon(route));
+        // Volume keys control the call's volume during a call (not media volume).
+        setVolumeControlStream(inCall ? android.media.AudioManager.STREAM_VOICE_CALL
+                : android.media.AudioManager.USE_DEFAULT_STREAM_TYPE);
         if (inCall) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
@@ -936,6 +1300,11 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             return;
         }
         BrowserTab t = currentTab();
+        if (t != null && t.isWeb() && !t.canGoBack()) {
+            // First page of a link tab: back to Teams/Outlook (the tab stays in the drop-up).
+            returnFromWebTab(mAccount, mOpenedFrom.get(t.key));
+            return;
+        }
         if (t != null && t.canGoBack()) {
             WebBackForwardList list = t.webView().copyBackForwardList();
             int idx = list.getCurrentIndex();
@@ -981,7 +1350,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (mFileCallback != null) mFileCallback.onReceiveValue(null);
         mFileCallback = callback;
         try {
-            Intent i = params.createIntent();
+            // Any file the page accepts, from any app (Files, Photos, Drive...), several at once.
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+            String[] mimes = mimeTypesFor(params.getAcceptTypes());
+            if (mimes.length > 0) i.putExtra(Intent.EXTRA_MIME_TYPES, mimes);
             if (params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
                 i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
             }
@@ -993,9 +1365,40 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
     }
 
+    /** "image/*,.pdf" -> {"image/*", "application/pdf"}; empty means anything. */
+    private static String[] mimeTypesFor(String[] accept) {
+        List<String> out = new ArrayList<>();
+        if (accept == null) return new String[0];
+        for (String entry : accept) {
+            if (entry == null) continue;
+            for (String part : entry.split(",")) {
+                String a = part.trim().toLowerCase(java.util.Locale.ROOT);
+                if (a.isEmpty()) continue;
+                if (a.equals("*/*") || a.equals("*")) return new String[0];
+                if (a.contains("/")) {
+                    if (!out.contains(a)) out.add(a);
+                } else if (a.startsWith(".")) {
+                    String m = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(a.substring(1));
+                    if (m != null && !out.contains(m)) out.add(m);
+                    else if (m == null) return new String[0]; // unknown extension: don't hide files
+                }
+            }
+        }
+        return out.toArray(new String[0]);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_ATTACH) {
+            if (resultCode != RESULT_OK) return;
+            BrowserTab t = mAttachTargetKey == null ? null : mTabs.existing(mAttachTargetKey);
+            if (t == null) t = currentTab();
+            List<com.workdeck.app.web.Attachments.Item> items = new ArrayList<>();
+            for (Uri u : urisOf(data)) items.add(com.workdeck.app.web.Attachments.add(this, u));
+            attachTo(t, items);
+            return;
+        }
         if (requestCode != REQ_FILE || mFileCallback == null) return;
         Uri[] result = null;
         if (resultCode == RESULT_OK && data != null) {

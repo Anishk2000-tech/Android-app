@@ -426,6 +426,15 @@
   }
 
   var ROUTE_IDS = { 'wd-route-speaker': 'SPEAKER', 'wd-route-earpiece': 'EARPIECE', 'wd-route-bluetooth': 'BLUETOOTH', 'wd-route-wired': 'WIRED' };
+  // Microphones Teams can pick. Android sends call audio to one device at a time, so a
+  // Bluetooth or headset microphone also means that device's speaker (and vice versa).
+  var MIC_IDS = { 'wd-mic-phone': 'phone', 'wd-mic-bluetooth': 'bluetooth', 'wd-mic-wired': 'wired' };
+  var micLabel = function (id, info) {
+    if (id === 'wd-mic-bluetooth') return info && info.btName ? 'Bluetooth: ' + info.btName : 'Bluetooth headset microphone';
+    if (id === 'wd-mic-wired') return 'Headset microphone';
+    if (id === 'wd-mic-phone') return 'Phone microphone';
+    return 'Automatic (Bluetooth or headset when connected)';
+  };
   var ROUTE_LABELS = { speaker: 'Phone speaker (loud)', earpiece: 'Phone earpiece', bluetooth: 'Bluetooth', wired: 'Headset' };
   var makeDevice = function (kind, id, label, group) {
     var proto = Object.prototype;
@@ -452,9 +461,19 @@
     var real = { audioinput: [], videoinput: [] };
     (list || []).forEach(function (d) { if (real[d.kind] && d.deviceId && d.label) real[d.kind].push(d); });
     var out = [];
-    if (real.audioinput.length) out = out.concat(real.audioinput);
-    else if (info.mic) out.push(makeDevice('audioinput', 'default', 'Phone microphone', 'wd-phone'));
-    else out.push(makeDevice('audioinput', '', '', ''));
+    var routes = info.routes || [];
+    // Always WorkDeck's own microphone list: picking one routes Android call audio, which
+    // the engine's own (often unlabelled or partial) list can't do reliably.
+    if (info.mic) {
+      out.push(makeDevice('audioinput', 'default', micLabel('default', info), 'wd-phone'));
+      out.push(makeDevice('audioinput', 'wd-mic-phone', micLabel('wd-mic-phone', info), 'wd-phone'));
+      if (routes.indexOf('bluetooth') >= 0) out.push(makeDevice('audioinput', 'wd-mic-bluetooth', micLabel('wd-mic-bluetooth', info), 'wd-route-bluetooth'));
+      if (routes.indexOf('wired') >= 0) out.push(makeDevice('audioinput', 'wd-mic-wired', micLabel('wd-mic-wired', info), 'wd-route-wired'));
+    } else if (real.audioinput.length) {
+      out = out.concat(real.audioinput);
+    } else {
+      out.push(makeDevice('audioinput', '', '', ''));
+    }
     if (real.videoinput.length) out = out.concat(real.videoinput);
     else if (info.camera) {
       (info.cameras || []).forEach(function (c) {
@@ -463,7 +482,10 @@
     } else if ((info.cameras || []).length) out.push(makeDevice('videoinput', '', '', ''));
     if (info.mic) {
       out.push(makeDevice('audiooutput', 'default', 'Automatic (phone chooses)', 'wd-phone'));
-      (info.routes || []).forEach(function (r) { out.push(makeDevice('audiooutput', 'wd-route-' + r, ROUTE_LABELS[r] || r, 'wd-route-' + r)); });
+      routes.forEach(function (r) {
+        var label = r === 'bluetooth' && info.btName ? 'Bluetooth: ' + info.btName : (ROUTE_LABELS[r] || r);
+        out.push(makeDevice('audiooutput', 'wd-route-' + r, label, r === 'speaker' || r === 'earpiece' ? 'wd-phone' : 'wd-route-' + r));
+      });
     } else {
       out.push(makeDevice('audiooutput', '', '', ''));
     }
@@ -516,16 +538,19 @@
       var origStop = t.stop;
       hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
     };
-    var reportId = function (t, id) {
+    var reportId = function (t, id, label) {
       if (!t || !id || !t.getSettings) return;
       var orig = t.getSettings;
       hidden(t, 'getSettings', function () { var s = orig.apply(this, arguments) || {}; s.deviceId = id; return s; });
+      if (label) { try { Object.defineProperty(t, 'label', { value: label, configurable: true, enumerable: true }); } catch (e) {} }
     };
     hidden(MediaDevices.prototype, 'getUserMedia', function (constraints) {
       var self = this;
       var fixed = fixConstraints(constraints);
       var audioId = constraints && constraints.audio && idOf(constraints.audio.deviceId);
       var videoId = constraints && constraints.video && idOf(constraints.video.deviceId);
+      // Teams picked one of our microphones: route Android call audio to that device.
+      if (audioId && MIC_IDS[audioId]) call('setMic', MIC_IDS[audioId]);
       return origGUM.call(self, fixed).catch(function (err) {
         // Constraints a phone can't meet (resolution, frame rate, stale ids): retry relaxed.
         var name = err && err.name || '';
@@ -536,7 +561,11 @@
         return origGUM.call(self, relaxed);
       }).then(function (stream) {
         try {
-          stream.getAudioTracks().forEach(function (t) { track(t); if (isOurId(audioId || 'default')) reportId(t, 'default'); });
+          stream.getAudioTracks().forEach(function (t) {
+            track(t);
+            var aid = audioId && isOurId(audioId) ? audioId : 'default';
+            if (isOurId(audioId || 'default')) reportId(t, aid || 'default', micLabel(aid, mediaInfo()));
+          });
           if (videoId && isOurId(videoId)) stream.getVideoTracks().forEach(function (t) { reportId(t, videoId); });
         } catch (e) {}
         return stream;
@@ -768,6 +797,196 @@
     };
     window.addEventListener('load', queueMail);
     if (document.documentElement) startMailWatch(); else document.addEventListener('DOMContentLoaded', startMailWatch);
+  }
+
+  // ------------------------------------------------------------------ attach phone files
+  // WorkDeck's 📎 button / Share-to-WorkDeck hand phone files to the message box the way
+  // dragging files onto it does (both Teams and Outlook attach dropped files). The files
+  // are read from Android through the bridge in chunks.
+  if (isTop) {
+    var lastCompose = null, composeOn = false, composeTimer = null;
+    var composeOf = function (el) {
+      if (!el || el.nodeType !== 1) return null;
+      if (el.tagName === 'TEXTAREA') return el;
+      if (el.isContentEditable) return el.closest('[contenteditable]:not([contenteditable="false"])') || el;
+      return null;
+    };
+    var setCompose = function (on) {
+      clearTimeout(composeTimer);
+      if (on) {
+        if (!composeOn) { composeOn = true; call('composeFocus', '1'); }
+        return;
+      }
+      composeTimer = setTimeout(function () { if (composeOn) { composeOn = false; call('composeFocus', '0'); } }, 1500);
+    };
+    document.addEventListener('focusin', function (e) {
+      var c = composeOf(e.target);
+      if (c) { lastCompose = c; setCompose(true); } else { setCompose(false); }
+    }, true);
+    document.addEventListener('focusout', function (e) { if (composeOf(e.target)) setCompose(false); }, true);
+
+    var visible = function (el) {
+      if (!el || !el.isConnected) return false;
+      var r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+    var findCompose = function () {
+      if (lastCompose && visible(lastCompose)) return lastCompose;
+      var all = [].slice.call(document.querySelectorAll('[contenteditable="true"],[contenteditable=""],textarea')).filter(visible);
+      var named = all.filter(function (el) {
+        return /message|reply|compose|body|type|chat|nachricht|mensaje/i.test((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('data-tid') || ''));
+      });
+      var pool = named.length ? named : all;
+      return pool.length ? pool[pool.length - 1] : null;
+    };
+    var readAttachment = async function (f) {
+      var parts = [], off = 0;
+      for (;;) {
+        var b64 = call('attachRead', f.id, off);
+        if (b64 === null || b64 === undefined) throw new Error('cannot read ' + f.name);
+        if (!b64) break;
+        var bin = atob(b64), arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        parts.push(arr);
+        off += arr.length;
+        await new Promise(function (r) { setTimeout(r, 0); });
+      }
+      return new File(parts, f.name, { type: f.type || 'application/octet-stream', lastModified: Date.now() });
+    };
+    var transfer = function (files) {
+      var dt = new DataTransfer();
+      files.forEach(function (f) { dt.items.add(f); });
+      return dt;
+    };
+    var fireDrag = function (target, type, dt) {
+      var ev;
+      try {
+        ev = new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt });
+      } catch (e) {
+        ev = new Event(type, { bubbles: true, cancelable: true });
+        try { Object.defineProperty(ev, 'dataTransfer', { value: dt }); } catch (x) {}
+      }
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    var tryDrop = function (target, files) {
+      var dt = transfer(files);
+      fireDrag(target, 'dragenter', dt);
+      fireDrag(target, 'dragover', dt);
+      return fireDrag(target, 'drop', dt);
+    };
+    var tryPaste = function (target, files) {
+      var dt = transfer(files), ev;
+      try { ev = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: dt }); } catch (e) { return false; }
+      if (!ev.clipboardData) { try { Object.defineProperty(ev, 'clipboardData', { value: dt }); } catch (x) { return false; } }
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    var tryInput = function (files) {
+      var inputs = [].slice.call(document.querySelectorAll('input[type="file"]'));
+      if (!inputs.length) return false;
+      var inp = inputs[inputs.length - 1];
+      for (var i = 0; i < inputs.length; i++) if (inputs[i].multiple) inp = inputs[i];
+      try { inp.files = transfer(files).files; } catch (e) { return false; }
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    };
+    var namesShown = function (files) {
+      var text = (document.body && document.body.innerText) || '';
+      return files.some(function (f) {
+        var base = f.name.replace(/\.[^.]+$/, '');
+        return base.length >= 3 && text.indexOf(base.slice(0, 40)) >= 0;
+      });
+    };
+    var waitShown = async function (files, already) {
+      if (already) return false;
+      for (var t = 0; t < 8; t++) {
+        await new Promise(function (r) { setTimeout(r, 400); });
+        if (namesShown(files)) return true;
+      }
+      return false;
+    };
+    hidden(window, '__wdInsertText', function (text) {
+      var target = findCompose();
+      if (!target) return false;
+      try { target.focus(); } catch (e) {}
+      if (target.tagName === 'TEXTAREA') {
+        target.setRangeText(String(text), target.selectionStart, target.selectionEnd, 'end');
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }
+      return document.execCommand('insertText', false, String(text));
+    });
+    hidden(window, '__wdAttach', function (json) {
+      var list;
+      try { list = JSON.parse(json) || []; } catch (e) { list = []; }
+      (async function () {
+        var files = [];
+        for (var i = 0; i < list.length; i++) {
+          try { files.push(await readAttachment(list[i])); } catch (e) { log('attach: ' + e.message); }
+        }
+        if (!files.length) { call('attachDone', 'readfailed', 0, '0'); return; }
+        var target = findCompose();
+        var before = namesShown(files);
+        var method = 'none', seen = false;
+        if (target) {
+          try { target.focus(); } catch (e) {}
+          if (tryDrop(target, files)) {
+            method = 'drop';
+            seen = await waitShown(files, before);
+          } else if (tryPaste(target, files)) {
+            method = 'paste';
+            seen = await waitShown(files, before);
+          }
+        }
+        if (method === 'none' && tryInput(files)) {
+          method = 'input';
+          seen = await waitShown(files, before);
+        }
+        call('attachDone', method, files.length, seen ? '1' : '0');
+      })();
+      return true;
+    });
+  }
+
+  // Pages that use Chrome's file-open dialog API (missing in Android WebView) get the
+  // classic file chooser instead, which Android serves with its own file picker.
+  if (typeof window.showOpenFilePicker !== 'function') {
+    hidden(window, 'showOpenFilePicker', function (opts) {
+      opts = opts || {};
+      return new Promise(function (resolve, reject) {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = !!opts.multiple;
+        input.style.display = 'none';
+        var accept = [];
+        (opts.types || []).forEach(function (t) {
+          var a = (t && t.accept) || {};
+          Object.keys(a).forEach(function (m) { accept.push(m); [].concat(a[m] || []).forEach(function (ext) { accept.push(ext); }); });
+        });
+        if (accept.length && !opts.excludeAcceptAllOption) input.accept = '';
+        else if (accept.length) input.accept = accept.join(',');
+        var done = false;
+        var finish = function () {
+          if (done) return;
+          done = true;
+          var files = [].slice.call(input.files || []);
+          input.remove();
+          if (!files.length) { reject(new DOMException('The user aborted a request.', 'AbortError')); return; }
+          resolve(files.map(function (f) {
+            return { kind: 'file', name: f.name, getFile: function () { return Promise.resolve(f); },
+              isSameEntry: function () { return Promise.resolve(false); },
+              queryPermission: function () { return Promise.resolve('granted'); },
+              requestPermission: function () { return Promise.resolve('granted'); } };
+          }));
+        };
+        input.addEventListener('change', finish);
+        input.addEventListener('cancel', finish);
+        (document.body || document.documentElement).appendChild(input);
+        input.click();
+      });
+    });
   }
 
   // Best-effort "who wrote" for unread-count notifications: the first unread item in the

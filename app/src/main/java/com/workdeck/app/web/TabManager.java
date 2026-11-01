@@ -94,6 +94,66 @@ public final class TabManager {
         return t;
     }
 
+    /** The tab of one of an account's opened links (object only; created on demand). */
+    public BrowserTab webTab(Account account, Account.WebTab web) {
+        if (account == null || web == null) return null;
+        initWeb();
+        String key = account.webKey(web.id);
+        BrowserTab t = mTabs.get(key);
+        if (t == null) {
+            initProfile(account.profile);
+            t = new BrowserTab(mApp, account, web);
+            if (mHost != null) t.setHost(mHost);
+            for (BrowserTab.Listener l : mGlobalListeners) t.addListener(l);
+            mTabs.put(key, t);
+        }
+        return t;
+    }
+
+    /**
+     * Opens a link as a new tab of the account (closing its oldest link tab if it has
+     * too many). Microsoft pages start in desktop view like Teams/Outlook, others in
+     * mobile view.
+     */
+    public BrowserTab openWebTab(Account account, String url) {
+        while (account.webTabs().size() >= Account.MAX_WEB_TABS) {
+            Account.WebTab oldest = account.oldestWebTab();
+            if (oldest == null) break;
+            closeWebTab(account, oldest.id);
+        }
+        Account.WebTab w = account.addWebTab(url, UrlRouter.isMicrosoft(url));
+        Accounts.get(mApp).save();
+        Log.i(TAG, account.id + ": opened link tab w" + w.id + " (" + UrlRouter.host(url) + ")");
+        return webTab(account, w);
+    }
+
+    /** Closes one of an account's link tabs (the × in its drop-up). */
+    public void closeWebTab(Account account, String webId) {
+        BrowserTab t = mTabs.remove(account.webKey(webId));
+        if (t != null) t.destroy();
+        account.removeWebTab(webId);
+        Accounts.get(mApp).save();
+    }
+
+    public List<BrowserTab> webTabsOf(Account a) {
+        List<BrowserTab> out = new ArrayList<>();
+        for (Account.WebTab w : a.webTabs()) out.add(webTab(a, w));
+        return out;
+    }
+
+    /** Unloads link tabs nobody has looked at for a while (they reload when opened again). */
+    public void trimIdleWebTabs(String visibleKey, long idleMs) {
+        long now = SystemClock.elapsedRealtime();
+        for (BrowserTab t : allTabs()) {
+            if (!t.isWeb() || !t.isCreated() || t.key.equals(visibleKey)) continue;
+            if (CallManager.get(mApp).inCall()) continue;
+            if (now - Math.max(t.shownAt(), t.loadedAt()) > idleMs) {
+                Log.i(TAG, "unloading idle link tab " + t.key);
+                t.destroy();
+            }
+        }
+    }
+
     public BrowserTab existing(String key) {
         return key == null ? null : mTabs.get(key);
     }
@@ -144,7 +204,8 @@ public final class TabManager {
 
     private boolean stillValid(BrowserTab t) {
         Account a = Accounts.get(mApp).find(t.account.id);
-        return a != null && a.siteEnabled(t.site);
+        if (a == null) return false;
+        return t.isWeb() ? a.webTab(t.web.id) != null : a.siteEnabled(t.site);
     }
 
     /** Removes the tabs of an account (or of one disabled site). */

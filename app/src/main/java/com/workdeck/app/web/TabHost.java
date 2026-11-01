@@ -36,6 +36,12 @@ public interface TabHost {
     /** Show another site of the same account as {@code from} (e.g. a Teams link in Outlook). */
     void switchToSite(BrowserTab from, Site site, String url);
 
+    /** Open a link from {@code from} in a new tab of the same account (and show it). */
+    void openLink(BrowserTab from, String url);
+
+    /** The page took (or could not take) files handed to it with {@link BrowserTab#attach}. */
+    void onAttachResult(BrowserTab tab, String method, int count, boolean seen);
+
     /** A site reported that the WebView engine is too old. */
     void onBrowserOutdated(String chromeMajor);
 }

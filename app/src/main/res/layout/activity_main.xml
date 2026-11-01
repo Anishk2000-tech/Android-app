@@ -11,6 +11,69 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
+        <LinearLayout
+            android:id="@+id/tab_header"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:background="@color/wd_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <ImageButton
+                android:id="@+id/tab_close"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/desc_close_tab"
+                android:src="@drawable/ic_close"
+                android:tint="@color/wd_icon" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tab_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:textColor="@color/wd_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tab_host"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:textColor="@color/wd_text2"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/tab_reload"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/menu_reload"
+                android:src="@drawable/ic_refresh"
+                android:tint="@color/wd_icon" />
+
+            <ImageButton
+                android:id="@+id/tab_external"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/desc_open_external"
+                android:src="@drawable/ic_open_external"
+                android:tint="@color/wd_icon" />
+        </LinearLayout>
+
         <FrameLayout
             android:id="@+id/web_area"
             android:layout_width="match_parent"
@@ -260,6 +323,16 @@
                 android:text="+"
                 android:textColor="@color/wd_icon"
                 android:textSize="22sp" />
+
+            <ImageButton
+                android:id="@+id/btn_attach"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/desc_attach"
+                android:src="@drawable/ic_attach"
+                android:tint="@color/wd_primary"
+                android:visibility="gone" />
 
             <ImageButton
                 android:id="@+id/btn_audio"

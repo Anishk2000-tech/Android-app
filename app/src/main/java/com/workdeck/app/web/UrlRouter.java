@@ -160,6 +160,37 @@ public final class UrlRouter {
                 || h.startsWith("device.login") || h.endsWith(".msauth.net") || h.startsWith("mysignins.");
     }
 
+    /**
+     * Windows that must stay attached to the page that opened them (they report back to
+     * it): Microsoft sign-in, and OAuth / single-sign-on pages of other services.
+     */
+    public static boolean looksLikeAuth(String url) {
+        if (isLogin(url)) return true;
+        String u = url.toLowerCase(Locale.ROOT);
+        int start = u.indexOf("://");
+        String rest = start < 0 ? u : u.substring(start + 3);
+        int slash = rest.indexOf('/');
+        String pathAndQuery = slash < 0 ? "" : rest.substring(slash);
+        return pathAndQuery.contains("oauth") || pathAndQuery.contains("authorize")
+                || pathAndQuery.contains("/signin") || pathAndQuery.contains("/sign-in")
+                || pathAndQuery.contains("/login") || pathAndQuery.contains("/sso")
+                || pathAndQuery.contains("saml") || pathAndQuery.contains("openid")
+                || pathAndQuery.contains("redirect_uri=");
+    }
+
+    /**
+     * What the user typed in "New tab": a web address (https:// added if missing) or,
+     * for anything else, a Bing search.
+     */
+    public static String fromUserInput(String input) {
+        String s = input == null ? "" : input.trim();
+        if (s.isEmpty()) return "";
+        if (isHttp(s)) return s;
+        boolean looksLikeHost = !s.contains(" ") && s.indexOf('.') > 0 && !s.endsWith(".");
+        if (looksLikeHost) return "https://" + s;
+        return "https://www.bing.com/search?q=" + encode(s);
+    }
+
     /** Which hosted site a URL naturally belongs to, or null. */
     public static Site siteFor(String url) {
         if (isTeams(url)) return Site.TEAMS;

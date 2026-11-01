@@ -235,4 +235,61 @@
     <string name="color_green">Green</string>
     <string name="color_amber">Amber</string>
     <string name="color_slate">Slate</string>
+
+    <!-- Link tabs (1.3) -->
+    <string name="desc_close_tab">Close this tab</string>
+    <string name="desc_close_named">Close %1$s</string>
+    <string name="menu_new_tab">New tab…</string>
+    <string name="new_tab_title">New tab in %1$s</string>
+    <string name="new_tab_hint">Web address or search</string>
+    <string name="new_tab_quick">Quick open (signed in as this account)</string>
+    <string name="new_tab_open">Open</string>
+    <string name="quick_m365">Microsoft 365 (Word, Excel, PowerPoint)</string>
+    <string name="quick_onedrive">OneDrive</string>
+    <string name="quick_sharepoint">SharePoint</string>
+    <string name="quick_calendar">Outlook calendar</string>
+    <string name="sec_links">Links</string>
+    <string name="set_links_in_app">Open links inside WorkDeck</string>
+    <string name="set_links_in_app_desc">Links clicked in Teams or Outlook open as tabs of the same account, in its drop-up (close them with ×). Off: links open in your phone\'s browser.</string>
+
+    <!-- Attaching phone files (1.3) -->
+    <string name="desc_attach">Attach files from phone</string>
+    <string name="menu_attach">Attach files from phone…</string>
+    <string name="attach_pick_title">Attach files</string>
+    <string name="attach_no_picker">No file picker app found on this phone</string>
+    <string name="attach_open_box">Open the chat or email and tap its message box – the files are added then</string>
+    <string name="attach_read_failed">Couldn\'t read that file</string>
+    <string name="attach_unavailable">This page can\'t take files</string>
+    <string name="attach_shared_hint">Open the chat (or email) and tap the message box – your files are added there</string>
+    <plurals name="attach_adding">
+        <item quantity="one">Adding %d file…</item>
+        <item quantity="other">Adding %d files…</item>
+    </plurals>
+    <plurals name="attach_done">
+        <item quantity="one">%d file attached</item>
+        <item quantity="other">%d files attached</item>
+    </plurals>
+    <plurals name="attach_handed">
+        <item quantity="one">%d file added – check the message box</item>
+        <item quantity="other">%d files added – check the message box</item>
+    </plurals>
+    <string name="share_title">Send to</string>
+    <string name="share_preparing">Preparing files…</string>
+    <string name="share_failed">Couldn\'t read the shared file</string>
+    <string name="share_label">WorkDeck</string>
+
+    <!-- Notification sounds (1.3) -->
+    <string name="sec_sounds">Notification sounds</string>
+    <string name="set_sound_teams">Teams message sound</string>
+    <string name="set_sound_outlook">Outlook mail sound</string>
+    <string name="sound_default">Phone\'s default sound</string>
+    <string name="sound_silent">Silent (vibrate only)</string>
+    <string name="sound_phone_sounds">Choose from phone\'s sounds…</string>
+    <string name="sound_from_file">Choose a sound file…</string>
+    <string name="sound_test">Play it</string>
+    <string name="sound_picker_missing">This phone has no sound picker</string>
+    <string name="set_loudness">Notification loudness</string>
+    <string name="set_loudness_desc">How loud WorkDeck plays message and mail sounds, compared to the sound itself. 300% is three times as loud. Lift your finger to hear it.</string>
+    <string name="percent_value">%1$d%%</string>
+    <string name="set_sounds_note">WorkDeck plays these sounds itself so they can be louder than usual. Silent mode, vibrate mode, Do Not Disturb and calls in progress still keep them quiet; your phone\'s notification volume still applies.</string>
 </resources>

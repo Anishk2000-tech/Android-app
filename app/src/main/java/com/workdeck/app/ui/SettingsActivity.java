@@ -20,6 +20,8 @@ import com.workdeck.app.Account;
 import com.workdeck.app.Accounts;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
+import com.workdeck.app.Site;
+import com.workdeck.app.notify.SoundPlayer;
 import com.workdeck.app.service.KeepAliveService;
 import com.workdeck.app.web.TabManager;
 
@@ -27,6 +29,10 @@ import com.workdeck.app.web.TabManager;
 public final class SettingsActivity extends Activity {
     private Prefs mPrefs;
     private TextView mAccountsRow;
+    private static final int REQ_RINGTONE = 10;
+    private static final int REQ_SOUND_FILE = 11;
+    private Site mSoundSite;
+    private final java.util.Map<Site, TextView> mSoundRows = new java.util.EnumMap<>(Site.class);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,6 +74,16 @@ public final class SettingsActivity extends Activity {
                     }
                 });
 
+        // ---- links
+        Ui.heading(c, getString(R.string.sec_links));
+        LinearLayout links = Ui.card(c);
+        toggle(links, R.string.set_links_in_app, R.string.set_links_in_app_desc, mPrefs.linksInApp(), new Toggle() {
+            @Override
+            public void set(boolean v) {
+                mPrefs.setLinksInApp(v);
+            }
+        });
+
         // ---- view
         Ui.heading(c, getString(R.string.sec_view));
         LinearLayout view = Ui.card(c);
@@ -97,6 +113,21 @@ public final class SettingsActivity extends Activity {
                                 }).show();
                     }
                 });
+
+        // ---- notification sounds
+        Ui.heading(c, getString(R.string.sec_sounds));
+        LinearLayout snd = Ui.card(c);
+        for (final Site s : Site.values()) {
+            mSoundRows.put(s, Ui.clickRow(snd, getString(s == Site.TEAMS ? R.string.set_sound_teams : R.string.set_sound_outlook),
+                    soundSummary(s), new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            chooseSound(s);
+                        }
+                    }));
+        }
+        loudnessRow(snd);
+        Ui.para(c, getString(R.string.set_sounds_note));
 
         // ---- background & notifications
         Ui.heading(c, getString(R.string.sec_background));
@@ -230,6 +261,139 @@ public final class SettingsActivity extends Activity {
         }
         Ui.para(c, getString(R.string.set_version, version, webview));
         Ui.para(c, getString(R.string.set_about_desc));
+    }
+
+    private String soundSummary(Site s) {
+        return SoundPlayer.soundTitle(this, s, getString(R.string.sound_default), getString(R.string.sound_silent));
+    }
+
+    private void chooseSound(final Site s) {
+        String[] options = {getString(R.string.sound_phone_sounds), getString(R.string.sound_from_file),
+                getString(R.string.sound_default), getString(R.string.sound_silent), getString(R.string.sound_test)};
+        new AlertDialog.Builder(this)
+                .setTitle(s == Site.TEAMS ? R.string.set_sound_teams : R.string.set_sound_outlook)
+                .setItems(options, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        mSoundSite = s;
+                        switch (which) {
+                            case 0: {
+                                android.net.Uri cur = SoundPlayer.soundUri(SettingsActivity.this, s);
+                                Intent i = new Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER)
+                                        .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
+                                                android.media.RingtoneManager.TYPE_NOTIFICATION)
+                                        .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                        .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+                                        .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI,
+                                                Settings.System.DEFAULT_NOTIFICATION_URI)
+                                        .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, cur);
+                                try {
+                                    startActivityForResult(i, REQ_RINGTONE);
+                                } catch (Throwable t) {
+                                    Toast.makeText(SettingsActivity.this, R.string.sound_picker_missing, Toast.LENGTH_LONG).show();
+                                }
+                                break;
+                            }
+                            case 1: {
+                                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                                        .setType("audio/*");
+                                try {
+                                    startActivityForResult(i, REQ_SOUND_FILE);
+                                } catch (Throwable t) {
+                                    Toast.makeText(SettingsActivity.this, R.string.sound_picker_missing, Toast.LENGTH_LONG).show();
+                                }
+                                break;
+                            }
+                            case 2:
+                                setSound(s, "");
+                                break;
+                            case 3:
+                                setSound(s, "none");
+                                break;
+                            default:
+                                SoundPlayer.test(SettingsActivity.this, s);
+                                break;
+                        }
+                    }
+                }).show();
+    }
+
+    private void setSound(Site s, String value) {
+        mPrefs.setNotificationSound(s, value);
+        TextView row = mSoundRows.get(s);
+        if (row != null) row.setText(soundSummary(s));
+        if (!"none".equals(value)) SoundPlayer.test(this, s);
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || mSoundSite == null) return;
+        if (requestCode == REQ_RINGTONE) {
+            android.net.Uri picked = data.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+            if (picked == null) setSound(mSoundSite, "none");
+            else if (picked.equals(Settings.System.DEFAULT_NOTIFICATION_URI)) setSound(mSoundSite, "");
+            else setSound(mSoundSite, picked.toString());
+        } else if (requestCode == REQ_SOUND_FILE && data.getData() != null) {
+            android.net.Uri u = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Throwable ignored) {
+            }
+            setSound(mSoundSite, u.toString());
+        }
+    }
+
+    /** "Notification loudness" slider: 100% - 400% of the sound file, in 25% steps. */
+    private void loudnessRow(LinearLayout parent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 10));
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        TextView title = new TextView(this);
+        title.setText(R.string.set_loudness);
+        title.setTextSize(16);
+        title.setTextColor(getColor(R.color.wd_text));
+        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        final TextView value = new TextView(this);
+        value.setTextSize(16);
+        value.setTextColor(getColor(R.color.wd_primary));
+        value.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        value.setText(getString(R.string.percent_value, mPrefs.soundBoost()));
+        top.addView(value);
+        row.addView(top);
+        final android.widget.SeekBar bar = new android.widget.SeekBar(this);
+        bar.setMax(12);
+        bar.setProgress((mPrefs.soundBoost() - 100) / 25);
+        bar.setContentDescription(getString(R.string.set_loudness));
+        bar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar b, int progress, boolean fromUser) {
+                value.setText(getString(R.string.percent_value, 100 + progress * 25));
+            }
+
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar b) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar b) {
+                mPrefs.setSoundBoost(100 + b.getProgress() * 25);
+                SoundPlayer.test(SettingsActivity.this, Site.TEAMS);
+            }
+        });
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = Ui.dp(this, 6);
+        row.addView(bar, blp);
+        TextView desc = new TextView(this);
+        desc.setText(R.string.set_loudness_desc);
+        desc.setTextSize(13);
+        desc.setTextColor(getColor(R.color.wd_text2));
+        row.addView(desc);
+        parent.addView(row);
     }
 
     private String accountsSummary() {

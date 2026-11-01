@@ -197,6 +197,55 @@ final class JsBridge {
         });
     }
 
+    /** Next chunk (base64) of a file the user is attaching; "" at the end, null on error. */
+    @JavascriptInterface
+    public String attachRead(String token, String id, String offset) {
+        if (!ok(token)) return null;
+        long off;
+        try {
+            off = Long.parseLong(offset.trim());
+        } catch (Throwable t) {
+            off = 0;
+        }
+        return Attachments.read(mApp, id, off);
+    }
+
+    /** How the page took the files: drop / paste / input / none; seen = file names appeared on the page. */
+    @JavascriptInterface
+    public void attachDone(String token, final String method, final String count, final String seen) {
+        if (!ok(token)) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                mTab.onAttachDone(method, parseInt(count, 0), "1".equals(seen));
+            }
+        });
+    }
+
+    /** The user is typing in a message box (show WorkDeck's attach button) or left it. */
+    @JavascriptInterface
+    public void composeFocus(String token, final String state) {
+        if (!ok(token)) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                mTab.setComposeFocused("1".equals(state));
+            }
+        });
+    }
+
+    /** Teams picked one of WorkDeck's microphones (phone / Bluetooth / headset). */
+    @JavascriptInterface
+    public void setMic(String token, final String mic) {
+        if (!ok(token)) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                CallManager.get(mApp).setMicByUser(mic);
+            }
+        });
+    }
+
     @JavascriptInterface
     public void log(String token, String msg) {
         if (!ok(token)) return;

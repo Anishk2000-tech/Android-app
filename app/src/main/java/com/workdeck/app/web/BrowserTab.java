@@ -59,7 +59,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * One long-lived WebView for Teams or Outlook. The WebView is created with an
+ * One long-lived WebView: an account's Teams or Outlook, or a link opened from them
+ * (an extra "web" tab, {@link #site} == null). The WebView is created with an
  * application-backed {@link MutableContextWrapper}, so it survives the activity
  * being destroyed (e.g. swiped away from Recents) and keeps receiving messages in
  * the background while the foreground service keeps the process alive.
@@ -70,9 +71,11 @@ public final class BrowserTab {
     private static final Pattern UNREAD = Pattern.compile("^\\s*\\((\\d+)\\+?\\)");
     private static String sScriptTemplate;
 
+    /** Teams or Outlook; null for an extra tab showing a link ({@link #web}). */
     public final Site site;
+    public final Account.WebTab web;
     public final Account account;
-    /** Unique id of this tab: "accountId|site". */
+    /** Unique id of this tab: "accountId|site" or "accountId|w<id>". */
     public final String key;
     private final Context mApp;
     private final Prefs mPrefs;
@@ -95,6 +98,7 @@ public final class BrowserTab {
     private int mBadgeUnread = -1;
     private String mError;
     private long mLoadedAt;
+    private long mShownAt;
     private boolean mStarted;
 
     private final List<Listener> mListeners = new ArrayList<>();
@@ -108,7 +112,22 @@ public final class BrowserTab {
         mPrefs = Prefs.get(mApp);
         this.account = account;
         this.site = site;
+        this.web = null;
         this.key = account.key(site);
+    }
+
+    /** An extra tab for a link opened in this account. */
+    BrowserTab(Context app, Account account, Account.WebTab web) {
+        mApp = app.getApplicationContext();
+        mPrefs = Prefs.get(mApp);
+        this.account = account;
+        this.site = null;
+        this.web = web;
+        this.key = account.webKey(web.id);
+    }
+
+    public boolean isWeb() {
+        return web != null;
     }
 
     /** Cookie jar of this account's WebView profile. */
@@ -123,7 +142,27 @@ public final class BrowserTab {
 
     /** "CRAFTWW · Teams" */
     public String label() {
-        return account.name + " · " + mApp.getString(site.titleRes);
+        return account.name + " · " + displayTitle();
+    }
+
+    /** "Teams", "Outlook", or the page title (host if it has none) of a link tab. */
+    public String displayTitle() {
+        if (site != null) return mApp.getString(site.titleRes);
+        String t = !mTitle.isEmpty() ? mTitle : web.title;
+        if (t == null || t.trim().isEmpty() || t.startsWith("http")) {
+            String h = UrlRouter.host(currentUrl() != null ? currentUrl() : web.url);
+            return h.startsWith("www.") ? h.substring(4) : h;
+        }
+        return t.trim();
+    }
+
+    /** Remembers when the tab was last on screen (idle link tabs are unloaded to save memory). */
+    public void markShown() {
+        mShownAt = SystemClock.elapsedRealtime();
+    }
+
+    public long shownAt() {
+        return mShownAt;
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -157,9 +196,9 @@ public final class BrowserTab {
         // very first thing done with a new WebView.
         mProfileMissing = !WebViewSupport.setProfile(wv, account.profile);
         mToken = newToken();
-        mDesktop = account.isDesktop(site);
+        mDesktop = web != null ? web.desktop : account.isDesktop(site);
 
-        applySettings(wv, mDesktop, account.textZoom(site), site);
+        applySettings(wv, mDesktop, textZoom(), site);
         CookieManager cm = cookies();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(wv, true);
@@ -224,7 +263,7 @@ public final class BrowserTab {
         try {
             boolean desktopIdentity = mDesktop || site == Site.TEAMS;
             cfg.put("token", mToken);
-            cfg.put("site", site.key);
+            cfg.put("site", site == null ? "web" : site.key);
             cfg.put("desktop", desktopIdentity);
             cfg.put("desktopLayout", mDesktop);
             cfg.put("desktopWidth", mPrefs.desktopWidth());
@@ -333,7 +372,7 @@ public final class BrowserTab {
             changed();
             return;
         }
-        loadUrl(account.homeUrl(site));
+        loadUrl(web != null ? web.url : account.homeUrl(site));
     }
 
     public void loadUrl(String url) {
@@ -386,12 +425,13 @@ public final class BrowserTab {
     }
 
     public void setDesktop(boolean desktop) {
-        account.setDesktop(site, desktop);
+        if (web != null) web.desktop = desktop;
+        else account.setDesktop(site, desktop);
         Accounts.get(mApp).save();
         if (mWebView == null) return;
         mDesktop = desktop;
         Log.i(TAG, key + ": view mode -> " + (desktop ? "desktop" : "mobile"));
-        applySettings(mWebView, mDesktop, account.textZoom(site), site);
+        applySettings(mWebView, mDesktop, textZoom(), site);
         registerScript();
         // A fresh navigation (not reload) guarantees the new identity is used everywhere.
         String url = mWebView.getUrl();
@@ -430,12 +470,13 @@ public final class BrowserTab {
     }
 
     public int textZoom() {
-        return account.textZoom(site);
+        return web != null ? web.textZoom : account.textZoom(site);
     }
 
     public void setTextZoom(int percent) {
         percent = Math.max(50, Math.min(250, percent));
-        account.setTextZoom(site, percent);
+        if (web != null) web.textZoom = percent;
+        else account.setTextZoom(site, percent);
         Accounts.get(mApp).save();
         if (mWebView != null) mWebView.getSettings().setTextZoom(percent);
     }
@@ -459,6 +500,7 @@ public final class BrowserTab {
     }
 
     public int unreadCount() {
+        if (web != null) return 0;
         return mBadgeUnread >= 0 ? mBadgeUnread : mTitleUnread;
     }
 
@@ -515,7 +557,57 @@ public final class BrowserTab {
         if (mHost != null) mHost.onBrowserOutdated(UserAgents.chromeMajor());
     }
 
+    // ------------------------------------------------------------------ attachments
+
+    private boolean mComposeFocused;
+    private long mComposeChangedAt;
+
+    /** True while the user is typing in a message/mail box of this page. */
+    public boolean composeFocused() {
+        return mComposeFocused;
+    }
+
+    void setComposeFocused(boolean focused) {
+        mComposeChangedAt = SystemClock.elapsedRealtime();
+        if (focused == mComposeFocused) return;
+        mComposeFocused = focused;
+        changed();
+    }
+
+    public long composeChangedAt() {
+        return mComposeChangedAt;
+    }
+
+    /** Hands phone files to the page's message box (like dropping them onto it). */
+    public void attach(List<Attachments.Item> items) {
+        if (mWebView == null || items.isEmpty()) return;
+        Log.i(TAG, key + ": attaching " + items.size() + " file(s)");
+        evaluate("window.__wdAttach ? (window.__wdAttach(" + JSONObject.quote(Attachments.json(items))
+                + "), 'started') : 'missing'", new ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        if (!"\"started\"".equals(value)) onAttachDone("unavailable", 0, false);
+                    }
+                });
+    }
+
+    /** Types text (shared from another app) into the page's message box. */
+    public void insertText(String text) {
+        evaluate("window.__wdInsertText && window.__wdInsertText(" + JSONObject.quote(text) + ")");
+    }
+
+    void onAttachDone(String method, int count, boolean seen) {
+        Log.i(TAG, key + ": attach result " + method + " x" + count + (seen ? " (visible)" : ""));
+        if (mHost != null) mHost.onAttachResult(this, method, count, seen);
+    }
+
     // ------------------------------------------------------------------ routing
+
+    /** A link clicked in this tab: a new tab of this account, or the phone's browser. */
+    void openLink(String url) {
+        if (mHost != null && mPrefs.linksInApp()) mHost.openLink(this, url);
+        else openExternal(url);
+    }
 
     public void openExternal(String url) {
         Context c = (mHost != null && mHost.activity() != null) ? mHost.activity() : mApp;
@@ -542,10 +634,11 @@ public final class BrowserTab {
                 mHost.switchToSite(this, target, url);
                 return true;
             }
+            if (web != null) return false; // a link tab browses freely
             String current = view.getUrl();
             boolean onAppPage = current != null && (UrlRouter.isTeams(current) || UrlRouter.isOutlook(current));
             if (!UrlRouter.isMicrosoft(url) && userGesture && !isRedirect && onAppPage) {
-                openExternal(url);
+                openLink(url);
                 return true;
             }
             return false;
@@ -610,7 +703,7 @@ public final class BrowserTab {
         WebView w = new WebView(activity);
         // Popups must live in the same profile (same sign-in) as the page that opened them.
         WebViewSupport.setProfile(w, account.profile);
-        applySettings(w, mDesktop, account.textZoom(site), site);
+        applySettings(w, mDesktop, textZoom(), site);
         cookies().setAcceptThirdPartyCookies(w, true);
         w.addJavascriptInterface(new JsBridge(this, mApp, mToken), BRIDGE_NAME);
         WebViewSupport.addDocumentStartScript(w, buildScript(), UrlRouter.injectionOriginRules());
@@ -639,6 +732,18 @@ public final class BrowserTab {
             if (!UrlRouter.isHttp(url)) {
                 handleNavigation(view, url, true, false);
                 mHost.closePopup(view);
+                return true;
+            }
+            if (mPrefs.linksInApp()) {
+                // Sign-in windows and the app's own pop-outs (Teams -> Teams, Outlook ->
+                // Outlook) must stay attached to the page that opened them; every other
+                // link becomes a tab of this account (same sign-in), named after the page.
+                if (UrlRouter.looksLikeAuth(url) || (target != null && target == site)) {
+                    mHost.showPopup(view);
+                    return false;
+                }
+                mHost.closePopup(view);
+                mHost.openLink(BrowserTab.this, url);
                 return true;
             }
             if (!UrlRouter.isMicrosoft(url)) {
@@ -709,6 +814,10 @@ public final class BrowserTab {
         public void onPageFinished(WebView view, String url) {
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
             cookies().flush();
+            if (web != null && UrlRouter.isHttp(url) && !url.equals(web.url)) {
+                web.url = url; // reopen where the user left off
+                Accounts.get(mApp).save();
+            }
             if (site == Site.TEAMS && url != null && UrlRouter.isTeams(url)
                     && (url.contains("/dl/launcher") || url.contains("/l/meetup-join") || url.contains("/l/"))) {
                 chooseWebAppOnLauncher(0);
@@ -774,6 +883,14 @@ public final class BrowserTab {
         @Override
         public void onReceivedTitle(WebView view, String title) {
             mTitle = title == null ? "" : title;
+            if (web != null) {
+                if (!mTitle.isEmpty() && !mTitle.equals(web.title) && !mTitle.startsWith("http")) {
+                    web.title = mTitle;
+                    Accounts.get(mApp).save();
+                }
+                changed();
+                return;
+            }
             Matcher m = UNREAD.matcher(mTitle);
             int before = unreadCount();
             mTitleUnread = m.find() ? Integer.parseInt(m.group(1)) : 0;

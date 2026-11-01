@@ -45,8 +45,15 @@ public final class Notifier {
 
     public static final String CH_SERVICE = "service";
     public static final String CH_IN_CALL = "in_call";
-    public static final String CH_TEAMS = "teams";
-    public static final String CH_OUTLOOK = "outlook";
+    /**
+     * Message channels (1.3+). They are silent: WorkDeck plays the user's chosen sound
+     * itself, louder if wanted (see {@link SoundPlayer}). They vibrate and pop up as before.
+     */
+    public static final String CH_TEAMS = "teams_messages";
+    public static final String CH_OUTLOOK = "outlook_mail";
+    /** Channels of 1.0-1.2 (with the phone's sound), replaced by the ones above. */
+    private static final String OLD_CH_TEAMS = "teams";
+    private static final String OLD_CH_OUTLOOK = "outlook";
     public static final String CH_CALLS = "calls";
     public static final String CH_FILES = "files";
 
@@ -92,13 +99,8 @@ public final class Notifier {
                 mApp.getString(R.string.channel_in_call), NotificationManager.IMPORTANCE_LOW);
         inCall.setShowBadge(false);
 
-        NotificationChannel teams = new NotificationChannel(CH_TEAMS,
-                mApp.getString(R.string.channel_teams), NotificationManager.IMPORTANCE_HIGH);
-        teams.enableVibration(true);
-
-        NotificationChannel outlook = new NotificationChannel(CH_OUTLOOK,
-                mApp.getString(R.string.channel_outlook), NotificationManager.IMPORTANCE_HIGH);
-        outlook.enableVibration(true);
+        NotificationChannel teams = messageChannel(CH_TEAMS, OLD_CH_TEAMS, R.string.channel_teams);
+        NotificationChannel outlook = messageChannel(CH_OUTLOOK, OLD_CH_OUTLOOK, R.string.channel_outlook);
 
         NotificationChannel calls = new NotificationChannel(CH_CALLS,
                 mApp.getString(R.string.channel_calls), NotificationManager.IMPORTANCE_HIGH);
@@ -119,6 +121,29 @@ public final class Notifier {
         mNm.createNotificationChannel(outlook);
         mNm.createNotificationChannel(calls);
         mNm.createNotificationChannel(files);
+        for (String old : new String[] {OLD_CH_TEAMS, OLD_CH_OUTLOOK}) {
+            try {
+                if (mNm.getNotificationChannel(old) != null) mNm.deleteNotificationChannel(old);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** A silent, pop-up message channel; keeps "blocked" if the user had blocked the old one. */
+    private NotificationChannel messageChannel(String id, String oldId, int nameRes) {
+        int importance = NotificationManager.IMPORTANCE_HIGH;
+        try {
+            NotificationChannel old = mNm.getNotificationChannel(oldId);
+            if (old != null && old.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                importance = NotificationManager.IMPORTANCE_NONE;
+            }
+        } catch (Throwable ignored) {
+        }
+        NotificationChannel ch = new NotificationChannel(id, mApp.getString(nameRes), importance);
+        ch.setSound(null, null);
+        ch.enableVibration(true);
+        ch.setVibrationPattern(new long[] {0, 250, 150, 250});
+        return ch;
     }
 
     // ------------------------------------------------------------------ web notifications
@@ -159,7 +184,9 @@ public final class Notifier {
                 .setContentIntent(openIntent(tab, jsId, id))
                 .setGroup("workdeck_" + tab.key)
                 .setOnlyAlertOnce(silent || (!renotify && tag != null && !tag.isEmpty() && isActive(id)));
+        boolean alert = !silent && (renotify || tag == null || tag.isEmpty() || !isActive(id));
         post(id, b);
+        if (alert) SoundPlayer.playFor(mApp, site, site == Site.TEAMS ? CH_TEAMS : CH_OUTLOOK);
         if (icon != null && !icon.isEmpty()) {
             loadIconAsync(icon, tab.cookies(), new IconCallback() {
                 @Override
@@ -342,6 +369,7 @@ public final class Notifier {
                 .setGroup("workdeck_" + tab.key);
         Log.i(TAG, tab.key + ": unread fallback notification (" + count + ", preview=" + (preview != null) + ")");
         post(id, b);
+        SoundPlayer.playFor(mApp, site, teams ? CH_TEAMS : CH_OUTLOOK);
     }
 
     // ------------------------------------------------------------------ calls

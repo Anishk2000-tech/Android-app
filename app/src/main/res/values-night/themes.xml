@@ -13,4 +13,12 @@
         <item name="android:textColorSecondary">@color/wd_text2</item>
     </style>
     <style name="Theme.WorkDeck.Page" parent="Theme.WorkDeck" />
+    <!-- Share-to-WorkDeck: just a dialog over the app that shared the files. -->
+    <style name="Theme.WorkDeck.Share" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:colorAccent">@color/wd_primary</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>

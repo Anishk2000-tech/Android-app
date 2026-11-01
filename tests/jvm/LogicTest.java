@@ -66,6 +66,23 @@ public final class LogicTest {
         eq(UrlRouter.host("https://[::1]:8080/"), "[::1]", "IPv6 literal host");
         eq(UrlRouter.siteFor("https://evil.com/#https://teams.microsoft.com/"), null, "fragment can't fake the host");
 
+        // Links: sign-in windows stay pop-ups, everything else becomes an account tab
+        check(UrlRouter.looksLikeAuth("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?x=1"), "Microsoft sign-in stays a pop-up");
+        check(UrlRouter.looksLikeAuth("https://github.com/login/oauth/authorize?client_id=1"), "OAuth of another service stays a pop-up");
+        check(UrlRouter.looksLikeAuth("https://app.example.com/sso?SAMLRequest=abc"), "SAML single sign-on stays a pop-up");
+        check(!UrlRouter.looksLikeAuth("https://contoso.sharepoint.com/:w:/r/sites/Team/Doc.docx"), "a SharePoint document opens as a tab");
+        check(!UrlRouter.looksLikeAuth("https://www.bbc.com/news/world-123"), "a news link opens as a tab");
+        check(!UrlRouter.looksLikeAuth("https://login-tips.example.com/"), "'login' in the host name alone is not a sign-in window");
+        eq(UrlRouter.fromUserInput("contoso.sharepoint.com/sites/x"), "https://contoso.sharepoint.com/sites/x", "New tab: address without https://");
+        eq(UrlRouter.fromUserInput("  https://www.office.com/  "), "https://www.office.com/", "New tab: full address kept");
+        eq(UrlRouter.fromUserInput("quarterly report"), "https://www.bing.com/search?q=quarterly%20report", "New tab: words become a search");
+        eq(UrlRouter.fromUserInput(""), "", "New tab: empty input does nothing");
+
+        // Notification loudness: percent of the sound -> LoudnessEnhancer gain (millibels)
+        eq(com.workdeck.app.notify.Loudness.millibels(100), 0, "100% = no boost");
+        eq(com.workdeck.app.notify.Loudness.millibels(300), 954, "300% = +9.5 dB");
+        eq(com.workdeck.app.notify.Loudness.millibels(400), 1204, "400% = +12 dB");
+
         // Incoming-call heuristic
         check(CallHeuristics.looksLikeIncomingCall("Alice Smith", "Incoming call", false), "\"Incoming call\" is a call");
         check(CallHeuristics.looksLikeIncomingCall("Bob is calling you", "", false), "\"is calling you\" is a call");

@@ -1,6 +1,9 @@
 package com.workdeck.app.call;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
@@ -27,6 +30,11 @@ import java.util.Map;
  * A call is "active" while the app is recording from the microphone. Start is
  * signalled early by the page (getUserMedia hook) or by the WebView permission
  * grant, then confirmed/ended by polling Android's active recording list.
+ *
+ * Routing: WorkDeck is the single owner of the call's audio device. The browser
+ * engine also picks a device whenever it (re)opens audio, and headsets come and go,
+ * so the chosen route is verified continuously and re-applied when something else
+ * changed it (within limits, so it never fights the user's own system controls).
  */
 public final class CallManager {
     private static final String TAG = "WorkDeck/Call";
@@ -58,6 +66,10 @@ public final class CallManager {
     private AudioFocusRequest mFocus;
     private PowerManager.WakeLock mCpuLock;
     private PowerManager.WakeLock mProximityLock;
+    private long mReassertWindowStart;
+    private int mReassertCount;
+    private int mBtRetries;
+    private int mScoAttempts;
 
     public static synchronized CallManager get(Context c) {
         if (sInstance == null) sInstance = new CallManager(c.getApplicationContext());
@@ -74,6 +86,33 @@ public final class CallManager {
                 pollNow();
             }
         }, mMain);
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                mAudio.addOnCommunicationDeviceChangedListener(app.getMainExecutor(),
+                        new AudioManager.OnCommunicationDeviceChangedListener() {
+                            @Override
+                            public void onCommunicationDeviceChanged(AudioDeviceInfo device) {
+                                if (mInCall) {
+                                    mMain.removeCallbacks(mVerifyOnce);
+                                    mMain.postDelayed(mVerifyOnce, 400);
+                                }
+                            }
+                        });
+            } catch (Throwable t) {
+                Log.w(TAG, "communication device listener unavailable", t);
+            }
+        } else {
+            try {
+                app.registerReceiver(new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context c, Intent i) {
+                        onScoState(i.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1));
+                    }
+                }, new IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED));
+            } catch (Throwable t) {
+                Log.w(TAG, "SCO receiver unavailable", t);
+            }
+        }
         mAudio.registerAudioDeviceCallback(new AudioDeviceCallback() {
             @Override
             public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
@@ -91,6 +130,7 @@ public final class CallManager {
 
     public void onMicPossiblyStarted() {
         mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
+        prepareCallAudio();
         startPolling();
         pollNow();
     }
@@ -100,9 +140,29 @@ public final class CallManager {
         Integer cur = mPageMic.get(tabKey);
         int n = Math.max(0, (cur == null ? 0 : cur) + delta);
         mPageMic.put(tabKey, n);
-        if (delta > 0) mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
+        if (delta > 0) {
+            mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
+            prepareCallAudio();
+        }
         startPolling();
         pollNow();
+    }
+
+    /**
+     * The page is opening the microphone: switch Android to call audio right away
+     * (echo cancellation, call volume, correct device) instead of after the call is
+     * confirmed, so the first seconds don't blast from the wrong speaker.
+     */
+    private void prepareCallAudio() {
+        if (mInCall) return;
+        try {
+            if (mAudio.getMode() != AudioManager.MODE_IN_COMMUNICATION) {
+                mAudio.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                mWeSetMode = true;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "could not set call audio mode", t);
+        }
     }
 
     public void resetPageMic(String tabKey) {
@@ -151,6 +211,8 @@ public final class CallManager {
                 mMain.postDelayed(this, POLL_MS);
             } else {
                 mPolling = false;
+                // The mic was opened briefly (e.g. a device test) but no call followed.
+                if (!mInCall && mWeSetMode) resetRouting();
             }
         }
     };
@@ -206,17 +268,25 @@ public final class CallManager {
             mCallStartedWall = System.currentTimeMillis();
             acquireCpu();
             requestFocus();
-            // Let Chromium switch the audio mode first, then apply our routing.
             final Route pending = mPendingRoute != null && availableRoutes().contains(mPendingRoute) ? mPendingRoute : null;
             mUserPicked = pending != null;
-            mMain.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (mInCall) applyRoute(pending != null ? pending : pickAutoRoute());
-                }
-            }, 800);
             mRoute = pending != null ? pending : pickAutoRoute();
+            mReassertCount = 0;
+            mBtRetries = 0;
+            mScoAttempts = 0;
+            mReassertWindowStart = SystemClock.elapsedRealtime();
+            // Apply now, and again once the browser engine has finished setting up its own
+            // audio (it picks a device when it opens the call's audio streams).
+            applyRoute(mRoute);
+            mMain.postDelayed(mReapply, 900);
+            mMain.postDelayed(mReapply, 2500);
+            mMain.removeCallbacks(mVerifyLoop);
+            mMain.postDelayed(mVerifyLoop, 4000);
         } else {
+            mMain.removeCallbacks(mReapply);
+            mMain.removeCallbacks(mVerifyLoop);
+            mMain.removeCallbacks(mVerifyOnce);
+            mMain.removeCallbacks(mBtRetry);
             resetRouting();
             abandonFocus();
             releaseLocks();
@@ -248,6 +318,21 @@ public final class CallManager {
         return out;
     }
 
+    /** Name of the connected Bluetooth headset (e.g. "Galaxy Buds2"), or null. */
+    public String bluetoothName() {
+        try {
+            for (AudioDeviceInfo d : mAudio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                int t = d.getType();
+                if (t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || t == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || isBle(t)) {
+                    CharSequence n = d.getProductName();
+                    if (n != null && n.length() > 0 && !n.toString().equals(android.os.Build.MODEL)) return n.toString();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
     private static boolean isBle(int type) {
         return Build.VERSION.SDK_INT >= 31 && (type == AudioDeviceInfo.TYPE_BLE_HEADSET
                 || type == AudioDeviceInfo.TYPE_BLE_SPEAKER);
@@ -274,7 +359,34 @@ public final class CallManager {
             return;
         }
         mUserPicked = true;
+        mBtRetries = 0;
+        mReassertCount = 0;
         applyRoute(r);
+    }
+
+    /**
+     * Teams picked a microphone. Android uses the microphone of the call's audio device,
+     * so a Bluetooth/headset mic means routing the call there; the phone mic means
+     * leaving any headset for the phone's own earpiece/speaker.
+     */
+    public void setMicByUser(String mic) {
+        if (mic == null) return;
+        Route target = null;
+        Route current = mInCall ? mRoute : mPendingRoute;
+        if ("bluetooth".equals(mic)) target = Route.BLUETOOTH;
+        else if ("wired".equals(mic)) target = Route.WIRED;
+        else if ("phone".equals(mic) && (current == Route.BLUETOOTH || current == Route.WIRED
+                || (current == null && pickAutoRoute() != phoneRoute()))) {
+            target = phoneRoute();
+        }
+        Log.i(TAG, "microphone " + mic + " -> route " + target);
+        if (target != null) setRouteByUser(target);
+    }
+
+    /** The phone's own speaker or earpiece, as set in Settings. */
+    private Route phoneRoute() {
+        return Prefs.ROUTE_EARPIECE.equals(Prefs.get(mApp).defaultRoute()) && availableRoutes().contains(Route.EARPIECE)
+                ? Route.EARPIECE : Route.SPEAKER;
     }
 
     /** Cycles Speaker -> Earpiece/Wired -> Bluetooth -> Speaker. */
@@ -291,11 +403,125 @@ public final class CallManager {
         }
         if (!mInCall) return;
         List<Route> avail = availableRoutes();
-        if (added && !mUserPicked && avail.contains(Route.BLUETOOTH) && mRoute != Route.BLUETOOTH) {
+        if (added && avail.contains(Route.BLUETOOTH) && mRoute != Route.BLUETOOTH) {
+            // A headset was just connected: that's where the user wants to talk.
+            mUserPicked = false;
             applyRoute(Route.BLUETOOTH);
+        } else if (added && avail.contains(Route.WIRED) && mRoute != Route.WIRED && mRoute != Route.BLUETOOTH) {
+            mUserPicked = false;
+            applyRoute(Route.WIRED);
         } else if (mRoute != null && !avail.contains(mRoute)) {
             mUserPicked = false;
             applyRoute(pickAutoRoute());
+        }
+    }
+
+    // ------------------------------------------------------------------ keeping the route
+
+    private final Runnable mReapply = new Runnable() {
+        @Override
+        public void run() {
+            if (mInCall && mRoute != null && !actualMatches(mRoute)) applyRoute(mRoute);
+        }
+    };
+
+    private final Runnable mVerifyOnce = new Runnable() {
+        @Override
+        public void run() {
+            verify();
+        }
+    };
+
+    private final Runnable mVerifyLoop = new Runnable() {
+        @Override
+        public void run() {
+            verify();
+            if (mInCall) mMain.postDelayed(this, 2500);
+        }
+    };
+
+    /** Bluetooth headset connected but its call profile isn't ready yet: try again shortly. */
+    private final Runnable mBtRetry = new Runnable() {
+        @Override
+        public void run() {
+            if (mInCall && mRoute == Route.BLUETOOTH && !actualMatches(Route.BLUETOOTH)) applyRoute(Route.BLUETOOTH);
+        }
+    };
+
+    private void verify() {
+        if (!mInCall || mRoute == null) return;
+        if (!availableRoutes().contains(mRoute)) {
+            mUserPicked = false;
+            applyRoute(pickAutoRoute());
+            return;
+        }
+        boolean modeOk;
+        try {
+            modeOk = mAudio.getMode() == AudioManager.MODE_IN_COMMUNICATION;
+        } catch (Throwable t) {
+            modeOk = true;
+        }
+        if (actualMatches(mRoute) && modeOk) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - mReassertWindowStart > 30000) {
+            mReassertWindowStart = now;
+            mReassertCount = 0;
+        }
+        if (++mReassertCount > 6) {
+            // Something keeps changing it (e.g. the user in Android's own controls): let it be.
+            return;
+        }
+        Log.i(TAG, "call audio moved away from " + mRoute + (modeOk ? "" : " (mode reset)") + "; restoring");
+        applyRoute(mRoute);
+    }
+
+    /** Is Android currently sending call audio where we want it? */
+    @SuppressWarnings("deprecation")
+    private boolean actualMatches(Route r) {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                AudioDeviceInfo d = mAudio.getCommunicationDevice();
+                return d != null && matches(r, d.getType());
+            }
+            switch (r) {
+                case SPEAKER: return mAudio.isSpeakerphoneOn() && !mAudio.isBluetoothScoOn();
+                case BLUETOOTH: return mAudio.isBluetoothScoOn();
+                default: return !mAudio.isSpeakerphoneOn() && !mAudio.isBluetoothScoOn();
+            }
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static boolean matches(Route r, int type) {
+        switch (r) {
+            case SPEAKER: return type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER;
+            case EARPIECE: return type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE;
+            case BLUETOOTH: return type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || isBle(type);
+            default: return type == AudioDeviceInfo.TYPE_WIRED_HEADSET || type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                    || type == AudioDeviceInfo.TYPE_USB_HEADSET;
+        }
+    }
+
+    /** Android < 12: Bluetooth call audio (SCO) connects asynchronously. */
+    @SuppressWarnings("deprecation")
+    private void onScoState(int state) {
+        if (!mInCall || mRoute != Route.BLUETOOTH) return;
+        if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
+            mScoAttempts = 0;
+            try {
+                mAudio.setBluetoothScoOn(true);
+            } catch (Throwable ignored) {
+            }
+            Log.i(TAG, "bluetooth audio connected");
+        } else if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED) {
+            if (++mScoAttempts <= 3 && availableRoutes().contains(Route.BLUETOOTH)) {
+                mMain.postDelayed(mBtRetry, 1000);
+            } else {
+                Log.w(TAG, "bluetooth audio would not connect; falling back");
+                mUserPicked = false;
+                applyRoute(availableRoutes().contains(Route.WIRED) ? Route.WIRED : phoneRoute());
+            }
         }
     }
 
@@ -310,25 +536,25 @@ public final class CallManager {
             if (Build.VERSION.SDK_INT >= 31) {
                 AudioDeviceInfo target = null;
                 for (AudioDeviceInfo d : mAudio.getAvailableCommunicationDevices()) {
-                    int t = d.getType();
-                    boolean match;
-                    switch (r) {
-                        case SPEAKER: match = t == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER; break;
-                        case EARPIECE: match = t == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE; break;
-                        case BLUETOOTH: match = t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || isBle(t); break;
-                        default: match = t == AudioDeviceInfo.TYPE_WIRED_HEADSET
-                                || t == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || t == AudioDeviceInfo.TYPE_USB_HEADSET;
-                    }
-                    if (match) {
+                    if (matches(r, d.getType())) {
                         target = d;
                         break;
                     }
                 }
-                if (target != null) mAudio.setCommunicationDevice(target);
+                boolean ok = target != null && mAudio.setCommunicationDevice(target);
+                if (ok) {
+                    mBtRetries = 0;
+                } else if (r == Route.BLUETOOTH && mInCall && ++mBtRetries <= 8) {
+                    // The headset is connected but its call profile isn't available yet.
+                    mMain.removeCallbacks(mBtRetry);
+                    mMain.postDelayed(mBtRetry, 700);
+                } else if (target == null) {
+                    Log.w(TAG, "no " + r + " device for calls right now");
+                }
             } else {
                 if (r == Route.BLUETOOTH) {
                     mAudio.setSpeakerphoneOn(false);
-                    mAudio.startBluetoothSco();
+                    if (!mAudio.isBluetoothScoOn()) mAudio.startBluetoothSco();
                     mAudio.setBluetoothScoOn(true);
                 } else {
                     if (mAudio.isBluetoothScoOn()) {
