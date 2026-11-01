@@ -49,7 +49,7 @@ run_setup_flow() {
   dismiss_dialogs
   shot "$1-main"; texts "$1-main"
   check "[$1] bottom bar shows the CRAFTWW, OMC and ACXIOM accounts + Add" "grep -qx 'CRAFTWW' $OUT/$1-main.txt && grep -qx 'OMC' $OUT/$1-main.txt && grep -qx 'ACXIOM' $OUT/$1-main.txt && grep -q 'Add account' $OUT/$1-main.txt"
-  python3 scripts/ci/ui.py tap "=CRAFTWW" > /dev/null
+  python3 scripts/ci/ui.py tap "=CRAFTWW"
   sleep 2
   shot "$1-dropup"; texts "$1-dropup"
   check "[$1] CRAFTWW drop-up lists its Teams and Outlook" "grep -q '^Teams' $OUT/$1-dropup.txt && grep -q '^Outlook' $OUT/$1-dropup.txt && grep -q 'CRAFTWW settings' $OUT/$1-dropup.txt"

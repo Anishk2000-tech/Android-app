@@ -89,8 +89,8 @@ async function openApp(account, app) {
   if (/tapped/.test(ui('has "isn\'t responding" && python3 scripts/ci/ui.py tap "Close app"'))) await sleep(1500);
   ui(`tap "=${account}"`);
   await sleep(1500);
-  if (!/tapped/.test(ui(`tap "=${app}"`))) ui(`tap "${app}"`);
-  await sleep(2500);
+  ui(`tap "^${app}"`); // "Teams" or "Teams  (3)" in the drop-up
+  await sleep(3000);
 }
 
 /** Every WebView page with a DevTools connection and the account marker set on it. */
@@ -344,8 +344,8 @@ async function connectAll() {
   const profiles = /multiProfile=true/.test(sh('adb logcat -d -s WorkDeck/WVSupport'));
   console.log('  WebView multi-profile support: ' + profiles);
   for (const x of await connectAll()) { await x.c.eval('window.__ciAcct = "CRAFTWW"', 8000); x.c.close(); }
-  sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
-  await sleep(2500);
+  sh(`adb shell am start -W -n ${PKG}/.ui.MainActivity`);
+  await sleep(4000);
   await openApp('OMC', 'Teams');
   await sleep(15000);
   shot('08-omc');
