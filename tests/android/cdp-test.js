@@ -25,6 +25,13 @@ function check(ok, what, detail) {
 const notifications = () => sh('adb shell dumpsys notification --noredact');
 const ui = (args) => { const r = sh('python3 scripts/ci/ui.py ' + args).trim(); console.log('  ui ' + args + ': ' + r.split('\n').pop()); return r; };
 async function waitFor(fn, ms) { for (let t = 0; t < ms; t += 1000) { if (fn()) return true; await sleep(1000); } return fn(); }
+const diag = (what) => {
+  const lines = sh('adb logcat -d -s WorkDeck/Notifier WorkDeck/Main WorkDeck/Bridge').split('\n').filter((l) => l.trim()).slice(-10);
+  const act = (sh('adb shell dumpsys activity activities').match(/(topResumedActivity|mResumedActivity)[^\n]*/) || [''])[0];
+  const text = '  [diag ' + what + '] resumed: ' + act.trim().slice(0, 120) + '\n' + lines.map((l) => '    ' + l.trim().slice(0, 160)).join('\n');
+  console.log(text);
+  try { fs.appendFileSync(path.join(OUT, 'summary.txt'), text + '\n'); } catch (e) {}
+};
 const wdNotifs = () => notifications().split('NotificationRecord').filter((r) => r.includes('pkg=com.workdeck.app'));
 const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '.png')} && python3 scripts/ci/thumb.py ${path.join(OUT, name + '.png')} ${name} > ${path.join(OUT, name + '.thumb')}`);
 
@@ -110,10 +117,7 @@ async function pageFor(pred) {
   const shown = await waitFor(() => wdNotifs().some((r) => r.includes('WorkDeck CI message')), 10000);
   check(shown, 'page notification shows as an Android notification');
   check(wdNotifs().some((r) => r.includes('WorkDeck CI message') && r.includes('channel=teams')), 'posted on the "Teams messages" channel');
-  if (!shown) {
-    console.log('  WorkDeck notification records:\n' + wdNotifs().map((r) => '   ' + r.slice(0, 400).replace(/\n/g, ' ')).join('\n'));
-    console.log('  logcat: ' + sh('adb logcat -d -s WorkDeck/Notifier WorkDeck/Bridge WorkDeck/Main').split('\n').slice(-15).join('\n  '));
-  }
+  if (!shown) diag('page notification');
   let n;
 
   // 3. Incoming-call style notification -> call alert channel; closing it from the page cancels it
@@ -136,6 +140,7 @@ async function pageFor(pred) {
   await teams.eval(`document.title = '(3) Chat | Microsoft Teams', 'ok'`);
   const unreadShown = await waitFor(() => wdNotifs().some((r) => r.includes('3 unread in Teams')), 12000);
   check(unreadShown, 'unread count rising (no site notification) shows "3 unread in Teams"');
+  if (!unreadShown) diag('unread');
   await teams.eval(`document.title = 'Chat | Microsoft Teams', 'ok'`);
   const unreadGone = await waitFor(() => !wdNotifs().some((r) => r.includes('unread in Teams')), 12000);
   check(unreadGone, 'unread notification removed when the count drops to 0');
@@ -147,6 +152,7 @@ async function pageFor(pred) {
     document.body.appendChild(d); return 'ok'; })()`);
   const screenRing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Video Caller') && r.includes('channel=calls')), 10000);
   check(screenRing, 'Teams call screen (Accept/Decline) in background rings with a call alert');
+  if (!screenRing) diag('call screen');
   await teams.eval(`document.getElementById('ci-call').remove(), 'ok'`);
   const screenGone = await waitFor(() => !wdNotifs().some((r) => r.includes('CI Video Caller')), 10000);
   check(screenGone, 'call alert stops when Teams removes its call screen');
@@ -180,35 +186,32 @@ async function pageFor(pred) {
   // 4b. Teams-facing media state (the fix for "mic/camera/speaker not detected")
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
   await sleep(3000);
-  const media = await teams.eval(`(async () => {
-    const raw = {};
-    for (const n of ['microphone', 'camera']) {
-      try { raw[n] = (await Permissions.prototype.query.call(navigator.permissions, { name: n })).state; } catch (e) { raw[n] = 'error:' + e.name; }
-    }
-    const fixed = {};
-    for (const n of ['microphone', 'camera']) fixed[n] = (await navigator.permissions.query({ name: n })).state;
-    const devices = (await navigator.mediaDevices.enumerateDevices()).map((d) => d.kind + ':' + d.label);
-    let cam = 'none';
-    try {
-      const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } }, video: { deviceId: { exact: 'wd-camera-front' } } });
-      cam = 'ok:' + st.getAudioTracks().length + 'a+' + st.getVideoTracks().length + 'v';
-      window.__ciCamStream = st;
-    } catch (e) { cam = 'ERR:' + e.name + ':' + e.message; }
-    return { raw, fixed, devices, cam };
-  })()`, 45000);
-  console.log('  media: ' + JSON.stringify(media));
-  check(media && media.raw && media.raw.microphone !== 'granted', 'root cause confirmed: plain WebView does not report the mic as granted', media && media.raw);
-  check(media && media.fixed && media.fixed.microphone === 'granted' && media.fixed.camera === 'granted', 'Teams now sees microphone + camera as granted', media && media.fixed);
-  const devs = (media && media.devices) || [];
-  check(devs.includes('audioinput:Phone microphone'), 'Teams sees the phone microphone', devs);
-  check(devs.some((d) => /^videoinput:(Front|Back) camera$/.test(d)), 'Teams sees the phone camera(s)', devs);
-  check(devs.includes('audiooutput:Phone speaker (loud)'), 'Teams sees speaker outputs', devs);
-  check(String(media && media.cam).startsWith('ok:1a+1v'), 'mic + camera open with the device ids Teams was given', media && media.cam);
-  await sleep(5000);
+  const rawMic = await teams.eval(`Promise.race([
+      Permissions.prototype.query.call(navigator.permissions, { name: 'microphone' }).then((st) => st.state, (e) => 'error:' + e.name),
+      new Promise((r) => setTimeout(() => r('no answer after 4s'), 4000))])`, 10000);
+  check(rawMic !== 'granted', 'root cause: plain WebView mic permission state is not "granted"', rawMic);
+  const fixed = await teams.eval(`Promise.all(['microphone', 'camera'].map((n) => navigator.permissions.query({ name: n }).then((st) => st.state)))`, 10000);
+  check(Array.isArray(fixed) && fixed[0] === 'granted' && fixed[1] === 'granted', 'Teams now sees microphone + camera as granted', fixed);
+  const devs = await teams.eval(`navigator.mediaDevices.enumerateDevices().then((l) => l.map((d) => d.kind + ':' + d.label))`, 15000);
+  const dl = Array.isArray(devs) ? devs : [];
+  check(dl.includes('audioinput:Phone microphone'), 'Teams sees the phone microphone', devs);
+  check(dl.some((d) => /^videoinput:(Front|Back) camera$/.test(d)), 'Teams sees the phone camera(s)', devs);
+  check(dl.includes('audiooutput:Phone speaker (loud)'), 'Teams sees speaker outputs', devs);
+  const cam = await teams.eval(`Promise.race([
+      navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } }, video: { deviceId: { exact: 'wd-camera-front' } } })
+        .then((st) => { window.__ciCamStream = st; return 'ok:' + st.getAudioTracks().length + 'a+' + st.getVideoTracks().length + 'v'; },
+              (e) => 'ERR:' + e.name + ':' + e.message),
+      new Promise((r) => setTimeout(() => r('no answer after 20s'), 20000))])`, 30000);
+  check(String(cam).startsWith('ok:1a+1v'), 'mic + camera open with the device ids Teams was given', cam);
+  if (!String(cam).startsWith('ok')) {
+    // Emulated cameras can be flaky: still test routing with an audio-only call.
+    await teams.eval(`navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } } }).then((st) => { window.__ciCamStream = st; return 'ok'; }, (e) => 'ERR:' + e.name)`, 20000);
+  }
+  await sleep(6000);
   const sink = await teams.eval(`(async () => { const a = new Audio(); await a.setSinkId('wd-route-earpiece'); return a.sinkId; })()`);
   await sleep(2500);
-  const routeLog = sh('adb logcat -d -s WorkDeck/Call').split('\n').filter((l) => /route=/.test(l)).pop() || '';
-  check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio', [sink, routeLog.trim().slice(-40)]);
+  const routeLog = sh('adb logcat -d -s WorkDeck/Call').split('\n').filter((l) => /route[= ]/.test(l)).pop() || '';
+  check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio', [sink, routeLog.trim().slice(-45)]);
   await teams.eval(`window.__ciCamStream && window.__ciCamStream.getTracks().forEach((t) => t.stop()), 'ok'`);
   await sleep(8000);
 

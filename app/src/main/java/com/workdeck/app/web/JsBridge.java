@@ -153,6 +153,13 @@ final class JsBridge {
         });
     }
 
+    /** "1" while the user is looking at this site in WorkDeck. */
+    @JavascriptInterface
+    public String looking(String token) {
+        if (!ok(token)) return "0";
+        return com.workdeck.app.UiState.isLookingAt(mTab.site) ? "1" : "0";
+    }
+
     /** Real Android microphone/camera permission, cameras and audio routes (JSON). */
     @JavascriptInterface
     public String mediaInfo(String token) {

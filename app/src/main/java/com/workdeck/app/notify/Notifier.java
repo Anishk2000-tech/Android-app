@@ -253,6 +253,7 @@ public final class Notifier {
         mUnread.put(site, count);
         boolean freshPage = SystemClock.elapsedRealtime() - tab.loadedAt() < 20000;
         if (freshPage) {
+            Log.i(TAG, site.key + ": unread " + count + " taken as baseline (page just loaded)");
             mAnnounced.put(site, count); // counts shown while a page is still loading are not news
             return;
         }

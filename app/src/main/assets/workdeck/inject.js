@@ -638,7 +638,9 @@
     };
     var scanCall = function () {
       scanQueued = false;
-      if (document.visibilityState === 'visible' && !ringingUi) return;
+      // Only while the user isn't looking at Teams (asked natively: older WebViews
+      // don't always report the page as hidden when the app is in the background).
+      if (!ringingUi && call('looking') === '1') return;
       var acc = null, dec = null;
       var btns = document.querySelectorAll('button[aria-label],button[title],button[data-tid],[role="button"][aria-label]');
       for (var i = 0; i < btns.length; i++) {

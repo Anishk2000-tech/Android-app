@@ -44,6 +44,7 @@ const BRIDGE_MOCK = `
     mediaDelta(t, d) { this._rec('mediaDelta', arguments); },
     mediaInfo(t) { return t === '${TOKEN}' ? JSON.stringify(window.__media) : ''; },
     setRoute(t, r) { this._rec('setRoute', arguments); },
+    looking(t) { return window.__looking || '0'; },
     callSignal(t, type, detail) { this._rec('callSignal', arguments); },
     log(t, m) { this._rec('log', arguments); },
   };
@@ -525,11 +526,20 @@ test('Teams incoming-call screen in the background raises a ringing signal (RSVP
     document.body.appendChild(toast);
     await tick();
     const ringing = sig();
+    window.__looking = '1';
+    const t2 = document.createElement('div');
+    t2.innerHTML = '<button aria-label="Accept audio call"></button>';
+    document.body.appendChild(t2);
+    await tick();
+    const whileLooking = sig().length;
+    t2.remove();
+    window.__looking = '0';
     toast.remove();
     await tick();
-    return { afterRsvp, ringing, all: sig() };
+    return { afterRsvp, ringing, whileLooking, all: sig() };
   });
   assert.strictEqual(r.afterRsvp, 0, 'meeting RSVP Accept/Decline must not ring');
+  assert.strictEqual(r.whileLooking, 1, 'no extra signals while the call is already ringing');
   assert.deepStrictEqual(r.ringing, ['ringing_ui:Bob Jones - is calling you']);
   assert.deepStrictEqual(r.all, ['ringing_ui:Bob Jones - is calling you', 'ringing_end:']);
   await ctx.close();
