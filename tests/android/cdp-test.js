@@ -37,7 +37,11 @@ const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '
 
 async function connect(wsUrl) {
   const ws = new WebSocket(wsUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  await new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error('DevTools connect timeout')), 10000);
+    ws.onopen = () => { clearTimeout(t); res(); };
+    ws.onerror = (e) => { clearTimeout(t); rej(e); };
+  });
   let id = 0;
   const pending = new Map();
   const handlers = {};
@@ -64,16 +68,23 @@ async function connect(wsUrl) {
   };
 }
 
+let devPort = 9300;
 async function pages() {
   const unix = sh('adb shell cat /proc/net/unix');
   const m = unix.match(/@(webview_devtools_remote_\d+)/);
   if (!m) return [];
-  sh(`adb forward tcp:9222 localabstract:${m[1]}`);
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 5; i++) {
+    // A fresh forwarded port each try: a stuck adb forward must not hang the whole test.
+    const port = devPort++;
+    sh(`adb forward tcp:${port} localabstract:${m[1]}`);
     try {
-      const list = await (await fetch('http://127.0.0.1:9222/json/list', { signal: AbortSignal.timeout(10000) })).json();
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(8000) })).json();
       return list.filter((p) => p.type === 'page');
-    } catch (e) { await sleep(1000); }
+    } catch (e) {
+      console.log('  DevTools list failed on port ' + port + ': ' + String(e && e.message || e).slice(0, 80));
+      sh(`adb forward --remove tcp:${port}`);
+      await sleep(1500);
+    }
   }
   return [];
 }
@@ -81,7 +92,12 @@ async function pages() {
 async function pageFor(pred) {
   const list = await pages();
   const p = list.find(pred);
-  return p ? connect(p.webSocketDebuggerUrl) : null;
+  try {
+    return p ? await connect(p.webSocketDebuggerUrl) : null;
+  } catch (e) {
+    console.log('  could not connect to ' + p.url.slice(0, 80) + ': ' + (e && e.message));
+    return null;
+  }
 }
 
 /** Bottom bar: tap an account, then pick Teams or Outlook in its drop-up. */
