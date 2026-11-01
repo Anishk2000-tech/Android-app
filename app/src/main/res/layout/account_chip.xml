@@ -3,7 +3,7 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="wrap_content"
     android:layout_height="44dp"
-    android:layout_marginEnd="3dp"
+    android:layout_marginEnd="2dp"
     android:clickable="true"
     android:focusable="true">
 
@@ -13,19 +13,14 @@
         android:duplicateParentState="true"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="10dp"
-        android:paddingEnd="8dp">
-
-        <View
-            android:id="@+id/chip_dot"
-            android:layout_width="8dp"
-            android:layout_height="8dp"
-            android:importantForAccessibility="no" />
+        android:paddingStart="9dp"
+        android:paddingEnd="9dp">
 
         <ImageView
             android:id="@+id/chip_icon"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_marginEnd="4dp"
             android:importantForAccessibility="no"
             android:visibility="gone" />
 
@@ -33,22 +28,12 @@
             android:id="@+id/chip_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="5dp"
-            android:maxWidth="120dp"
             android:ellipsize="end"
+            android:maxWidth="96dp"
             android:singleLine="true"
             android:textColor="@color/wd_text2"
-            android:textSize="13sp"
+            android:textSize="12.5sp"
             android:textStyle="bold" />
-
-        <ImageView
-            android:id="@+id/chip_arrow"
-            android:layout_width="14dp"
-            android:layout_height="14dp"
-            android:layout_marginStart="1dp"
-            android:importantForAccessibility="no"
-            android:src="@drawable/ic_chevron_up"
-            android:tint="@color/wd_icon" />
     </LinearLayout>
 
     <TextView

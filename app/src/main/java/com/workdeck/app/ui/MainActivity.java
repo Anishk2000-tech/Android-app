@@ -267,6 +267,12 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         mFullscreen = findViewById(R.id.fullscreen_container);
         mChipScroll = findViewById(R.id.account_scroll);
         mChips = findViewById(R.id.account_chips);
+        findViewById(R.id.btn_add_account).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                addAccount();
+            }
+        });
         mBtnView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -486,10 +492,6 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         for (final Account a : mAccounts.list()) {
             View chip = inf.inflate(R.layout.account_chip, mChips, false);
             ((TextView) chip.findViewById(R.id.chip_name)).setText(a.name);
-            GradientDrawable dot = new GradientDrawable();
-            dot.setShape(GradientDrawable.OVAL);
-            dot.setColor(AccountDialogs.accent(this, a));
-            chip.findViewById(R.id.chip_dot).setBackground(dot);
             chip.setContentDescription(getString(R.string.desc_account_chip, a.name));
             chip.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -508,20 +510,6 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             mChips.addView(chip);
             mChipViews.put(a.id, chip);
         }
-        TextView add = new TextView(this);
-        add.setText("+");
-        add.setTextSize(20);
-        add.setTextColor(getColor(R.color.wd_icon));
-        add.setGravity(android.view.Gravity.CENTER);
-        add.setContentDescription(getString(R.string.desc_add_account));
-        add.setBackgroundResource(R.drawable.tab_bg);
-        add.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                addAccount();
-            }
-        });
-        mChips.addView(add, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 40)));
     }
 
     private void addAccount() {
@@ -616,17 +604,17 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             bg.setCornerRadius(Ui.dp(this, 18));
             bg.setColor(active ? (accent & 0x00FFFFFF) | (night ? 0x33000000 : 0x24000000) : 0);
             chip.setBackground(bg);
+            // Every account keeps its colour; the one on screen is highlighted and shows
+            // the icon of the app (Teams / Outlook) that is open.
             TextView name = chip.findViewById(R.id.chip_name);
-            name.setTextColor(active ? accent : getColor(R.color.wd_text2));
+            name.setTextColor(accent);
+            name.setAlpha(active ? 1f : 0.8f);
             ImageView icon = chip.findViewById(R.id.chip_icon);
-            View dot = chip.findViewById(R.id.chip_dot);
             if (active && mSite != null) {
                 icon.setImageDrawable(siteIcon(mSite, accent));
                 icon.setVisibility(View.VISIBLE);
-                dot.setVisibility(View.GONE);
             } else {
                 icon.setVisibility(View.GONE);
-                dot.setVisibility(View.VISIBLE);
             }
             int n = mTabs.unreadOf(a);
             TextView badge = chip.findViewById(R.id.chip_badge);

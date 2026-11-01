@@ -25,17 +25,28 @@ alive() {
     exit 3
   fi
 }
+# Emulator system apps sometimes show "X isn't responding" over everything: close those.
+dismiss_dialogs() {
+  for i in 1 2 3; do
+    python3 scripts/ci/ui.py has "isn't responding" >/dev/null 2>&1 || return 0
+    echo "  closing a system 'isn't responding' dialog"
+    python3 scripts/ci/ui.py tap "Close app" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "Wait" >/dev/null 2>&1
+    sleep 2
+  done
+}
 mem() { timeout 10 adb shell "cat /proc/meminfo | head -3" 2>/dev/null | tr -s ' ' | tr '\n' ' '; echo; }
-texts() { python3 scripts/ci/ui.py texts > "$OUT/$1.txt"; echo "--- screen text ($1):"; head -40 "$OUT/$1.txt"; }
+texts() { dismiss_dialogs; python3 scripts/ci/ui.py texts > "$OUT/$1.txt"; echo "--- screen text ($1):"; head -40 "$OUT/$1.txt"; }
 
 run_setup_flow() {
   adb shell am start -W -n "$PKG/.ui.MainActivity"
   sleep 6
+  dismiss_dialogs
   shot "$1-setup"; texts "$1-setup"
   check "[$1] setup screen is shown on first launch" "grep -q 'Welcome to WorkDeck' $OUT/$1-setup.txt"
   python3 scripts/ci/ui.py tap "Start WorkDeck" 15
   echo "waiting for Teams / Outlook to load..."
   for i in 1 2 3 4; do sleep 10; alive; echo "  t+${i}0s mem: $(mem)"; done
+  dismiss_dialogs
   shot "$1-main"; texts "$1-main"
   check "[$1] bottom bar shows the CRAFTWW, OMC and ACXIOM accounts + Add" "grep -qx 'CRAFTWW' $OUT/$1-main.txt && grep -qx 'OMC' $OUT/$1-main.txt && grep -qx 'ACXIOM' $OUT/$1-main.txt && grep -q 'Add account' $OUT/$1-main.txt"
   python3 scripts/ci/ui.py tap "=CRAFTWW" > /dev/null
@@ -50,6 +61,8 @@ run_setup_flow() {
 }
 
 adb shell settings put global heads_up_notifications_enabled 1
+adb shell settings put global hide_error_dialogs 1 >/dev/null 2>&1 || true
+adb shell pm disable-user --user 0 com.google.android.googlesdksetup >/dev/null 2>&1 || true
 adb logcat -c
 # Keep a running copy of logcat on the host so it survives an emulator crash.
 (adb logcat -v time > "$OUT/logcat-stream.txt" 2>&1 &)

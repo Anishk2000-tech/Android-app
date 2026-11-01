@@ -86,6 +86,7 @@ async function pageFor(pred) {
 
 /** Bottom bar: tap an account, then pick Teams or Outlook in its drop-up. */
 async function openApp(account, app) {
+  if (/tapped/.test(ui('has "isn\'t responding" && python3 scripts/ci/ui.py tap "Close app"'))) await sleep(1500);
   ui(`tap "=${account}"`);
   await sleep(1500);
   if (!/tapped/.test(ui(`tap "=${app}"`))) ui(`tap "${app}"`);
