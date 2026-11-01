@@ -17,10 +17,16 @@ WorkDeck is a small Android app (≈125 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## What's new in 1.1.0
+* **Teams now detects the phone's microphone, camera and speaker.** Android WebView tells websites that microphone/camera are "blocked" and hides all device names, so Teams thought there were none. WorkDeck now answers from Android's real permissions and gives Teams a proper device list: *Phone microphone*, *Front/Back camera*, and speakers *Phone speaker (loud)*, *Phone earpiece*, *Bluetooth*, *Headset*. Choosing a speaker in Teams' device settings switches Android's call audio.
+* **Message notifications even when Teams doesn't send one.** When the unread count goes up while you're not looking, WorkDeck posts a notification itself (with the sender and message preview when it can read them). If Teams does send its own notification, that one is used instead — no duplicates.
+* **Incoming calls ring even without a Teams notification:** WorkDeck notices Teams' incoming-call screen (Accept/Decline) in the background and rings, and stops when the call is answered elsewhere or missed.
+* Install it over 1.0.0 — you stay signed in.
+
 ## 1. Install (step by step)
 
 1. **Download the APK** on your phone:
-   open **[release/WorkDeck-1.0.0.apk](release/WorkDeck-1.0.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
+   open **[release/WorkDeck-1.1.0.apk](release/WorkDeck-1.1.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
 2. Open the downloaded file (tap the download notification, or open *Files → Downloads*).
 3. If Android says *"For your security, your phone is not allowed to install unknown apps from this source"*: tap **Settings → turn on "Allow from this source"**, then go back.
 4. Tap **Install**. If **Play Protect** warns about an unknown app, tap **More details → Install anyway** (it warns about every app not from the Play Store).
@@ -71,6 +77,7 @@ The bottom bar:
 * **During a call:** use the speaker button (bottom bar or the "Teams call in progress" notification) to switch **Speaker / Earpiece / Bluetooth**. Holding the phone to your ear with earpiece selected turns the screen off. The screen stays on otherwise.
 * **Leaving the app during a call** shows it in a small picture-in-picture window; the call (and your microphone) keeps working.
 * **Bluetooth earbuds / car:** connect them before or during the call — WorkDeck switches to them automatically.
+* **In Teams' own device settings** (in a call: *More → Settings → Device settings*), you can also pick *Phone speaker (loud)*, *Phone earpiece* or *Bluetooth* as the speaker, and *Front/Back camera*.
 * **Meeting links** from mail or other apps: choose **WorkDeck** when Android asks which app to open them with.
 
 ### Settings (⋮ → Settings)

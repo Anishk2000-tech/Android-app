@@ -51,6 +51,7 @@ public final class CallManager {
     private long mCallStartedWall;
     private Route mRoute;
     private boolean mUserPicked;
+    private Route mPendingRoute;
     private boolean mWeSetMode;
     private boolean mPolling;
     private int mEmptyPolls;
@@ -203,22 +204,24 @@ public final class CallManager {
         Log.i(TAG, "inCall=" + inCall);
         if (inCall) {
             mCallStartedWall = System.currentTimeMillis();
-            mUserPicked = false;
             acquireCpu();
             requestFocus();
             // Let Chromium switch the audio mode first, then apply our routing.
+            final Route pending = mPendingRoute != null && availableRoutes().contains(mPendingRoute) ? mPendingRoute : null;
+            mUserPicked = pending != null;
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    if (mInCall) applyRoute(pickAutoRoute());
+                    if (mInCall) applyRoute(pending != null ? pending : pickAutoRoute());
                 }
             }, 800);
-            mRoute = pickAutoRoute();
+            mRoute = pending != null ? pending : pickAutoRoute();
         } else {
             resetRouting();
             abandonFocus();
             releaseLocks();
             mRoute = null;
+            mPendingRoute = null;
         }
         dispatch();
     }
@@ -260,8 +263,16 @@ public final class CallManager {
         return Route.SPEAKER;
     }
 
-    /** Called from the UI / notification buttons. */
+    /** Called from the UI / notification buttons / Teams' speaker picker. */
     public void setRouteByUser(Route r) {
+        if (r == null) return;
+        if (!mInCall) {
+            // Outside a call, don't touch Android's audio mode (that would affect other
+            // apps' sound); remember the choice for the next call instead.
+            mPendingRoute = r;
+            Log.i(TAG, "route " + r + " saved for the next call");
+            return;
+        }
         mUserPicked = true;
         applyRoute(r);
     }
@@ -274,6 +285,10 @@ public final class CallManager {
     }
 
     private void onDevicesChanged(boolean added) {
+        // Let Teams refresh its device list (it re-reads enumerateDevices on 'devicechange').
+        for (com.workdeck.app.web.BrowserTab t : com.workdeck.app.web.TabManager.get(mApp).enabledTabs()) {
+            if (t.isCreated()) t.evaluate("window.__wdDevicesChanged && window.__wdDevicesChanged()");
+        }
         if (!mInCall) return;
         List<Route> avail = availableRoutes();
         if (added && !mUserPicked && avail.contains(Route.BLUETOOTH) && mRoute != Route.BLUETOOTH) {

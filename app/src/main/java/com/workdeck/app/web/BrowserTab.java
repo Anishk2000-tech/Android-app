@@ -45,6 +45,7 @@ import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
 import com.workdeck.app.Site;
 import com.workdeck.app.call.CallManager;
+import com.workdeck.app.notify.Notifier;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -424,8 +425,15 @@ public final class BrowserTab {
 
     void setBadgeCount(int n) {
         if (n == mBadgeUnread) return;
+        int before = unreadCount();
         mBadgeUnread = n < 0 ? -1 : n;
+        unreadMaybeChanged(before);
         changed();
+    }
+
+    private void unreadMaybeChanged(int before) {
+        int after = unreadCount();
+        if (after != before) Notifier.get(mApp).onUnreadChanged(this, after);
     }
 
     public void addListener(Listener l) {
@@ -645,6 +653,7 @@ public final class BrowserTab {
             mLoadedAt = SystemClock.elapsedRealtime();
             mError = null;
             CallManager.get(mApp).resetPageMic(site);
+            Notifier.get(mApp).resetUnreadBaseline(site);
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
             changed();
         }
@@ -719,7 +728,9 @@ public final class BrowserTab {
         public void onReceivedTitle(WebView view, String title) {
             mTitle = title == null ? "" : title;
             Matcher m = UNREAD.matcher(mTitle);
+            int before = unreadCount();
             mTitleUnread = m.find() ? Integer.parseInt(m.group(1)) : 0;
+            unreadMaybeChanged(before);
             changed();
         }
 

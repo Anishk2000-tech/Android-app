@@ -146,7 +146,32 @@ final class JsBridge {
             @Override
             public void run() {
                 if ("ringing".equals(type)) Notifier.get(mApp).onRingtoneHeard(mTab.site);
+                else if ("ringing_ui".equals(type)) Notifier.get(mApp).onCallScreen(mTab.site, true, detail);
+                else if ("ringing_end".equals(type)) Notifier.get(mApp).onCallScreen(mTab.site, false, detail);
                 else if ("unsupported_browser".equals(type)) mTab.onBrowserUnsupported();
+            }
+        });
+    }
+
+    /** Real Android microphone/camera permission, cameras and audio routes (JSON). */
+    @JavascriptInterface
+    public String mediaInfo(String token) {
+        if (!ok(token)) return "";
+        return MediaInfo.json(mApp);
+    }
+
+    /** Teams picked one of WorkDeck's "speakers": route call audio there. */
+    @JavascriptInterface
+    public void setRoute(String token, final String route) {
+        if (!ok(token)) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    CallManager.get(mApp).setRouteByUser(CallManager.Route.valueOf(route));
+                } catch (Throwable t) {
+                    Log.w(TAG, "bad route " + route, t);
+                }
             }
         });
     }

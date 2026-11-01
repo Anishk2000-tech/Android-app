@@ -30,6 +30,7 @@ const BRIDGE_MOCK = `
   window.__calls = [];
   window.__perm = 'granted';
   window.__files = {};
+  window.__media = { mic: true, camera: true, cameras: ['front', 'back'], routes: ['speaker', 'earpiece', 'bluetooth'], route: '' };
   window.WorkDeckBridge = {
     _rec(name, args) { window.__calls.push({ name: name, args: Array.prototype.slice.call(args) }); },
     permission(t) { this._rec('permission', arguments); return t === '${TOKEN}' ? window.__perm : 'denied'; },
@@ -41,6 +42,8 @@ const BRIDGE_MOCK = `
     fileChunk(t, id, b64) { window.__files[id].chunks.push(b64); },
     fileEnd(t, id, status) { this._rec('fileEnd', arguments); },
     mediaDelta(t, d) { this._rec('mediaDelta', arguments); },
+    mediaInfo(t) { return t === '${TOKEN}' ? JSON.stringify(window.__media) : ''; },
+    setRoute(t, r) { this._rec('setRoute', arguments); },
     callSignal(t, type, detail) { this._rec('callSignal', arguments); },
     log(t, m) { this._rec('log', arguments); },
   };
@@ -56,6 +59,9 @@ const PAGES = {
   '/late.html': `<!doctype html><html><head><title>t</title></head><body><script>
       var m = document.createElement('meta'); m.name = 'viewport'; m.content = 'width=device-width, user-scalable=0';
       document.head.appendChild(m);</script></body></html>`,
+  '/teams.html': `<!doctype html><html><head><title>Chat | Teams</title></head><body>
+      <div role="tree"><div role="treeitem" aria-label="Alice Smith, Hey are you free for a call?, 10:42, Unread">Alice</div></div>
+      </body></html>`,
   '/sw.html': `<!doctype html><html><head><title>sw</title></head><body>sw page</body></html>`,
   '/sw.js': `${SHIM}\nself.addEventListener('install', e => self.skipWaiting());
       self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
@@ -403,6 +409,136 @@ test('works without the native bridge (e.g. a non-Microsoft frame): no exception
   });
   assert.strictEqual(r, 'default');
   assert.deepStrictEqual(errors, []);
+  await ctx.close();
+});
+
+test('mic/camera permission queries follow Android (not WebView\'s blanket "denied")', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const out = {};
+    for (const n of ['microphone', 'camera', 'speaker-selection', 'push']) out[n] = (await navigator.permissions.query({ name: n })).state;
+    window.__media.mic = false; window.__media.camera = false;
+    out.micOff = (await navigator.permissions.query({ name: 'microphone' })).state;
+    out.camOff = (await navigator.permissions.query({ name: 'camera' })).state;
+    return out;
+  });
+  assert.deepStrictEqual(r, { microphone: 'granted', camera: 'granted', 'speaker-selection': 'granted', push: 'granted', micOff: 'prompt', camOff: 'prompt' });
+  await ctx.close();
+});
+
+// What Android WebView itself returns: one nameless, id-less entry per kind.
+const WEBVIEW_ENUMERATE = `MediaDevices.prototype.enumerateDevices = function () {
+  return Promise.resolve(['audioinput', 'videoinput', 'audiooutput'].map((k) => ({ kind: k, deviceId: '', label: '', groupId: '' })));
+};`;
+
+test('enumerateDevices lists phone mic, front/back cameras and Android audio routes', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript(WEBVIEW_ENUMERATE);
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/mobile.html');
+  const r = await page.evaluate(async () => {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const out = list.map((d) => d.kind + '|' + d.deviceId + '|' + d.label);
+    const info = list.find((d) => d.kind === 'audioinput');
+    const types = { mdi: info instanceof MediaDeviceInfo, json: JSON.stringify(info), caps: typeof info.getCapabilities };
+    window.__media.mic = false; window.__media.camera = false;
+    const locked = (await navigator.mediaDevices.enumerateDevices()).map((d) => d.kind + '|' + d.deviceId + '|' + d.label);
+    return { out, types, locked };
+  });
+  assert.deepStrictEqual(r.out, [
+    'audioinput|default|Phone microphone', 'videoinput|wd-camera-front|Front camera', 'videoinput|wd-camera-back|Back camera',
+    'audiooutput|default|Automatic (phone chooses)', 'audiooutput|wd-route-speaker|Phone speaker (loud)',
+    'audiooutput|wd-route-earpiece|Phone earpiece', 'audiooutput|wd-route-bluetooth|Bluetooth']);
+  assert.strictEqual(r.types.mdi, true);
+  assert.ok(r.types.json.includes('"label":"Phone microphone"'));
+  assert.strictEqual(r.types.caps, 'function');
+  assert.deepStrictEqual(r.locked, ['audioinput||', 'videoinput||', 'audiooutput||'], 'before permission: ids/labels hidden like a browser');
+  await ctx.close();
+});
+
+test('real, labelled devices (desktop-like engines) are passed through, plus Android routes', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
+    const list = await navigator.mediaDevices.enumerateDevices();
+    return list.map((d) => d.kind + '|' + (d.deviceId.startsWith('wd-') || d.deviceId === 'default' ? d.deviceId : 'real') + '|' + !!d.label);
+  });
+  assert.ok(r.some((x) => /^audioinput\|(real|default)\|true$/.test(x)), JSON.stringify(r));
+  assert.ok(r.includes('audiooutput|wd-route-earpiece|true'), JSON.stringify(r));
+  await ctx.close();
+});
+
+test('getUserMedia accepts the device ids WorkDeck handed out (incl. back camera)', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const s = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: 'default' }, echoCancellation: true },
+      video: { deviceId: { exact: 'wd-camera-back' }, width: { ideal: 1280 } } });
+    const a = s.getAudioTracks()[0].getSettings().deviceId;
+    const v = s.getVideoTracks()[0].getSettings().deviceId;
+    s.getTracks().forEach((t) => t.stop());
+    const s2 = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: 'wd-route-speaker' } });
+    s2.getTracks().forEach((t) => t.stop());
+    return { a, v, tracks: s.getTracks().length, s2: s2.getAudioTracks().length };
+  });
+  assert.deepStrictEqual(r, { a: 'default', v: 'wd-camera-back', tracks: 2, s2: 1 });
+  await ctx.close();
+});
+
+test('choosing a speaker in Teams (setSinkId) switches Android audio routing', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const el = new Audio();
+    await el.setSinkId('wd-route-earpiece');
+    const after = el.sinkId;
+    await el.setSinkId('default');
+    const ac = new AudioContext();
+    if (ac.setSinkId) await ac.setSinkId('wd-route-bluetooth');
+    return { after, routes: window.__calls.filter((c) => c.name === 'setRoute').map((c) => c.args[1]) };
+  });
+  assert.strictEqual(r.after, 'wd-route-earpiece');
+  assert.deepStrictEqual(r.routes, ['EARPIECE', 'BLUETOOTH'], '"default" must not override the user\'s route');
+  await ctx.close();
+});
+
+test('Teams incoming-call screen in the background raises a ringing signal (RSVP buttons do not)', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript("Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });");
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/teams.html');
+  const r = await page.evaluate(async () => {
+    const tick = () => new Promise((res) => setTimeout(res, 50));
+    const sig = () => window.__calls.filter((c) => c.name === 'callSignal').map((c) => c.args[1] + ':' + c.args[2]);
+    const rsvp = document.createElement('div');
+    rsvp.innerHTML = '<button aria-label="Accept">Accept</button><button aria-label="Decline">Decline</button>';
+    document.body.appendChild(rsvp);
+    await tick();
+    const afterRsvp = sig().length;
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'alertdialog');
+    toast.innerHTML = '<div>Bob Jones</div><div>is calling you</div>' +
+      '<button aria-label="Accept video call"></button><button aria-label="Accept audio call"></button><button aria-label="Decline call"></button>';
+    document.body.appendChild(toast);
+    await tick();
+    const ringing = sig();
+    toast.remove();
+    await tick();
+    return { afterRsvp, ringing, all: sig() };
+  });
+  assert.strictEqual(r.afterRsvp, 0, 'meeting RSVP Accept/Decline must not ring');
+  assert.deepStrictEqual(r.ringing, ['ringing_ui:Bob Jones - is calling you']);
+  assert.deepStrictEqual(r.all, ['ringing_ui:Bob Jones - is calling you', 'ringing_end:']);
+  await ctx.close();
+});
+
+test('unread preview reads sender and message from the chat list', async (b, base) => {
+  const { ctx, page } = await newPage(b, base, {}, '/teams.html');
+  const r = await page.evaluate(() => window.__wdUnreadPreview());
+  assert.deepStrictEqual(r, { title: 'Alice Smith', body: 'Hey are you free for a call? - 10:42' });
   await ctx.close();
 });
 

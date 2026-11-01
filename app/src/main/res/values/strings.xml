@@ -82,6 +82,10 @@
     <string name="quit">Quit</string>
     <string name="incoming_call">Incoming Teams call</string>
     <string name="incoming_call_text">Tap to open Teams and answer</string>
+    <string name="unread_teams_title">New Teams message</string>
+    <string name="unread_teams_text">%1$d unread in Teams</string>
+    <string name="unread_outlook_title">New email</string>
+    <string name="unread_outlook_text">%1$d unread in Outlook</string>
     <string name="answer">Answer</string>
     <string name="decline">Decline</string>
     <string name="call_in_progress">Teams call in progress</string>

@@ -130,6 +130,27 @@ async function pageFor(pred) {
     console.log('  logcat: ' + sh('adb logcat -d -s WorkDeck/Notifier WorkDeck/Main').split('\n').slice(-12).join('\n  '));
   }
 
+  // 3b. Unread count goes up but the site sends no notification -> WorkDeck posts one
+  await teams.eval(`document.title = 'Chat | Microsoft Teams', 'ok'`);
+  await sleep(1500);
+  await teams.eval(`document.title = '(3) Chat | Microsoft Teams', 'ok'`);
+  const unreadShown = await waitFor(() => wdNotifs().some((r) => r.includes('3 unread in Teams')), 12000);
+  check(unreadShown, 'unread count rising (no site notification) shows "3 unread in Teams"');
+  await teams.eval(`document.title = 'Chat | Microsoft Teams', 'ok'`);
+  const unreadGone = await waitFor(() => !wdNotifs().some((r) => r.includes('unread in Teams')), 12000);
+  check(unreadGone, 'unread notification removed when the count drops to 0');
+
+  // 3c. Teams' own incoming-call screen in the background -> ringing call alert
+  await teams.eval(`(function () { var d = document.createElement('div'); d.id = 'ci-call'; d.setAttribute('role', 'alertdialog');
+    d.innerHTML = '<div>CI Video Caller</div><div>is calling you</div><button aria-label="Accept video call">v</button>' +
+      '<button aria-label="Accept audio call">a</button><button aria-label="Decline call">x</button>';
+    document.body.appendChild(d); return 'ok'; })()`);
+  const screenRing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Video Caller') && r.includes('channel=calls')), 10000);
+  check(screenRing, 'Teams call screen (Accept/Decline) in background rings with a call alert');
+  await teams.eval(`document.getElementById('ci-call').remove(), 'ok'`);
+  const screenGone = await waitFor(() => !wdNotifs().some((r) => r.includes('CI Video Caller')), 10000);
+  check(screenGone, 'call alert stops when Teams removes its call screen');
+
   // 4. Microphone through WebRTC getUserMedia + call detection + background survival
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
   await sleep(3000);
@@ -155,6 +176,41 @@ async function pageFor(pred) {
   await teams.eval(`window.__ciStream.getTracks().forEach((t) => t.stop()), 'ok'`);
   await sleep(10000);
   check(!notifications().includes('Teams call in progress'), 'call state cleared after the mic is released');
+
+  // 4b. Teams-facing media state (the fix for "mic/camera/speaker not detected")
+  sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);
+  await sleep(3000);
+  const media = await teams.eval(`(async () => {
+    const raw = {};
+    for (const n of ['microphone', 'camera']) {
+      try { raw[n] = (await Permissions.prototype.query.call(navigator.permissions, { name: n })).state; } catch (e) { raw[n] = 'error:' + e.name; }
+    }
+    const fixed = {};
+    for (const n of ['microphone', 'camera']) fixed[n] = (await navigator.permissions.query({ name: n })).state;
+    const devices = (await navigator.mediaDevices.enumerateDevices()).map((d) => d.kind + ':' + d.label);
+    let cam = 'none';
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } }, video: { deviceId: { exact: 'wd-camera-front' } } });
+      cam = 'ok:' + st.getAudioTracks().length + 'a+' + st.getVideoTracks().length + 'v';
+      window.__ciCamStream = st;
+    } catch (e) { cam = 'ERR:' + e.name + ':' + e.message; }
+    return { raw, fixed, devices, cam };
+  })()`, 45000);
+  console.log('  media: ' + JSON.stringify(media));
+  check(media && media.raw && media.raw.microphone !== 'granted', 'root cause confirmed: plain WebView does not report the mic as granted', media && media.raw);
+  check(media && media.fixed && media.fixed.microphone === 'granted' && media.fixed.camera === 'granted', 'Teams now sees microphone + camera as granted', media && media.fixed);
+  const devs = (media && media.devices) || [];
+  check(devs.includes('audioinput:Phone microphone'), 'Teams sees the phone microphone', devs);
+  check(devs.some((d) => /^videoinput:(Front|Back) camera$/.test(d)), 'Teams sees the phone camera(s)', devs);
+  check(devs.includes('audiooutput:Phone speaker (loud)'), 'Teams sees speaker outputs', devs);
+  check(String(media && media.cam).startsWith('ok:1a+1v'), 'mic + camera open with the device ids Teams was given', media && media.cam);
+  await sleep(5000);
+  const sink = await teams.eval(`(async () => { const a = new Audio(); await a.setSinkId('wd-route-earpiece'); return a.sinkId; })()`);
+  await sleep(2500);
+  const routeLog = sh('adb logcat -d -s WorkDeck/Call').split('\n').filter((l) => /route=/.test(l)).pop() || '';
+  check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio', [sink, routeLog.trim().slice(-40)]);
+  await teams.eval(`window.__ciCamStream && window.__ciCamStream.getTracks().forEach((t) => t.stop()), 'ok'`);
+  await sleep(8000);
 
   // 5. Zoom buttons change the page scale
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);

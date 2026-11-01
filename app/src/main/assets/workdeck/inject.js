@@ -301,24 +301,6 @@
       });
     }
 
-    if (navigator.permissions && navigator.permissions.query) {
-      var origQuery = navigator.permissions.query;
-      hidden(navigator.permissions, 'query', function (desc) {
-        if (desc && desc.name === 'notifications') {
-          var p = permission();
-          var st;
-          try { st = Object.create(PermissionStatus.prototype); } catch (e) { st = {}; }
-          own(st, 'state', p === 'default' ? 'prompt' : p);
-          own(st, 'name', 'notifications');
-          hidden(st, 'onchange', null);
-          hidden(st, 'addEventListener', function () {});
-          hidden(st, 'removeEventListener', function () {});
-          hidden(st, 'dispatchEvent', function () { return true; });
-          return Promise.resolve(st);
-        }
-        return origQuery.apply(this, arguments);
-      });
-    }
   }
 
   // Badging API -> unread counter in the tab bar and status notification.
@@ -381,9 +363,128 @@
     }).catch(function (e) { call('fileEnd', '', 'error:' + e); });
   });
 
-  // ------------------------------------------------------------------ calls
+  // ------------------------------------------------------------------ permissions & media devices
+  // Android WebView has no saved camera/microphone permission state, so on its own it
+  // tells pages microphone/camera are "denied" and hides device names and ids from
+  // enumerateDevices(). Teams then believes there is no microphone, camera or speaker.
+  // WorkDeck answers from Android's real state instead, hands out stable device ids,
+  // maps them back to real constraints in getUserMedia(), and turns Teams' speaker
+  // choice into Android audio routing.
+  var mediaInfo = function () {
+    var raw = call('mediaInfo');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) { return null; }
+  };
+  var fakeStatus = function (name, state) {
+    var st;
+    try { st = Object.create(PermissionStatus.prototype); } catch (e) { st = {}; }
+    own(st, 'state', state);
+    own(st, 'status', state);
+    own(st, 'name', name);
+    hidden(st, 'onchange', null);
+    hidden(st, 'addEventListener', function () {});
+    hidden(st, 'removeEventListener', function () {});
+    hidden(st, 'dispatchEvent', function () { return true; });
+    return st;
+  };
+  if (navigator.permissions && navigator.permissions.query) {
+    var origQuery = navigator.permissions.query;
+    hidden(navigator.permissions, 'query', function (desc) {
+      var name = desc && desc.name;
+      if (CFG.notifications && (name === 'notifications' || name === 'push')) {
+        var p = permission();
+        return Promise.resolve(fakeStatus(name, p === 'default' ? 'prompt' : p));
+      }
+      if (name === 'microphone' || name === 'camera') {
+        var info = mediaInfo();
+        if (info) return Promise.resolve(fakeStatus(name, (name === 'camera' ? info.camera : info.mic) ? 'granted' : 'prompt'));
+      }
+      if (name === 'speaker-selection') return Promise.resolve(fakeStatus(name, 'granted'));
+      return origQuery.apply(this, arguments);
+    });
+  }
+
+  var ROUTE_IDS = { 'wd-route-speaker': 'SPEAKER', 'wd-route-earpiece': 'EARPIECE', 'wd-route-bluetooth': 'BLUETOOTH', 'wd-route-wired': 'WIRED' };
+  var ROUTE_LABELS = { speaker: 'Phone speaker (loud)', earpiece: 'Phone earpiece', bluetooth: 'Bluetooth', wired: 'Headset' };
+  var makeDevice = function (kind, id, label, group) {
+    var proto = Object.prototype;
+    try {
+      if (kind !== 'audiooutput' && typeof InputDeviceInfo !== 'undefined') proto = InputDeviceInfo.prototype;
+      else if (typeof MediaDeviceInfo !== 'undefined') proto = MediaDeviceInfo.prototype;
+    } catch (e) {}
+    var d = Object.create(proto);
+    own(d, 'deviceId', id);
+    own(d, 'kind', kind);
+    own(d, 'label', label);
+    own(d, 'groupId', group);
+    hidden(d, 'toJSON', function () { return { deviceId: id, kind: kind, label: label, groupId: group }; });
+    if (kind !== 'audiooutput') {
+      hidden(d, 'getCapabilities', function () {
+        return kind === 'videoinput' ? { deviceId: id, facingMode: [id === 'wd-camera-back' ? 'environment' : 'user'] } : { deviceId: id };
+      });
+    }
+    return d;
+  };
+  var augmentDevices = function (list) {
+    var info = mediaInfo();
+    if (!info) return list;
+    var real = { audioinput: [], videoinput: [] };
+    (list || []).forEach(function (d) { if (real[d.kind] && d.deviceId && d.label) real[d.kind].push(d); });
+    var out = [];
+    if (real.audioinput.length) out = out.concat(real.audioinput);
+    else if (info.mic) out.push(makeDevice('audioinput', 'default', 'Phone microphone', 'wd-phone'));
+    else out.push(makeDevice('audioinput', '', '', ''));
+    if (real.videoinput.length) out = out.concat(real.videoinput);
+    else if (info.camera) {
+      (info.cameras || []).forEach(function (c) {
+        out.push(makeDevice('videoinput', 'wd-camera-' + c, c === 'back' ? 'Back camera' : (c === 'front' ? 'Front camera' : 'Camera'), 'wd-camera-' + c));
+      });
+    } else if ((info.cameras || []).length) out.push(makeDevice('videoinput', '', '', ''));
+    if (info.mic) {
+      out.push(makeDevice('audiooutput', 'default', 'Automatic (phone chooses)', 'wd-phone'));
+      (info.routes || []).forEach(function (r) { out.push(makeDevice('audiooutput', 'wd-route-' + r, ROUTE_LABELS[r] || r, 'wd-route-' + r)); });
+    } else {
+      out.push(makeDevice('audiooutput', '', '', ''));
+    }
+    return out;
+  };
+  var idOf = function (v) {
+    if (v == null) return null;
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) return v.length ? idOf(v[0]) : null;
+    if (typeof v === 'object') return idOf(v.exact) || idOf(v.ideal);
+    return null;
+  };
+  var isOurId = function (id) { return id === 'default' || id === '' || (typeof id === 'string' && id.indexOf('wd-') === 0); };
+  var fixTrack = function (c, isVideo) {
+    if (!c || typeof c !== 'object') return c;
+    var t = Object.assign({}, c);
+    var id = t.deviceId !== undefined ? idOf(t.deviceId) : null;
+    if (id !== null && isOurId(id)) {
+      delete t.deviceId;
+      if (isVideo && id === 'wd-camera-back') t.facingMode = { ideal: 'environment' };
+      else if (isVideo && id === 'wd-camera-front') t.facingMode = { ideal: 'user' };
+    }
+    if (Array.isArray(t.advanced)) {
+      t.advanced = t.advanced.map(function (a) {
+        var b = Object.assign({}, a);
+        if (b.deviceId !== undefined && isOurId(idOf(b.deviceId))) delete b.deviceId;
+        return b;
+      });
+    }
+    return Object.keys(t).length ? t : true;
+  };
+  var fixConstraints = function (c) {
+    if (!c || typeof c !== 'object') return c;
+    var out = Object.assign({}, c);
+    if (out.audio) out.audio = fixTrack(out.audio, false);
+    if (out.video) out.video = fixTrack(out.video, true);
+    return out;
+  };
+
   if (navigator.mediaDevices && typeof MediaDevices !== 'undefined' && MediaDevices.prototype.getUserMedia) {
     var origGUM = MediaDevices.prototype.getUserMedia;
+    var origEnum = MediaDevices.prototype.enumerateDevices;
     var track = function (t) {
       if (!t || t.__wdTracked || t.kind !== 'audio') return;
       hidden(t, '__wdTracked', true);
@@ -394,12 +495,37 @@
       var origStop = t.stop;
       hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
     };
-    hidden(MediaDevices.prototype, 'getUserMedia', function () {
-      return origGUM.apply(this, arguments).then(function (stream) {
-        try { stream.getAudioTracks().forEach(track); } catch (e) {}
+    var reportId = function (t, id) {
+      if (!t || !id || !t.getSettings) return;
+      var orig = t.getSettings;
+      hidden(t, 'getSettings', function () { var s = orig.apply(this, arguments) || {}; s.deviceId = id; return s; });
+    };
+    hidden(MediaDevices.prototype, 'getUserMedia', function (constraints) {
+      var self = this;
+      var fixed = fixConstraints(constraints);
+      var audioId = constraints && constraints.audio && idOf(constraints.audio.deviceId);
+      var videoId = constraints && constraints.video && idOf(constraints.video.deviceId);
+      return origGUM.call(self, fixed).catch(function (err) {
+        // Constraints a phone can't meet (resolution, frame rate, stale ids): retry relaxed.
+        var name = err && err.name || '';
+        if (!/Overconstrained|NotFound|NotReadable|Constraint/i.test(name) || !fixed) throw err;
+        var relaxed = {};
+        if (fixed.audio) relaxed.audio = true;
+        if (fixed.video) relaxed.video = (fixed.video && fixed.video.facingMode) ? { facingMode: fixed.video.facingMode } : true;
+        return origGUM.call(self, relaxed);
+      }).then(function (stream) {
+        try {
+          stream.getAudioTracks().forEach(function (t) { track(t); if (isOurId(audioId || 'default')) reportId(t, 'default'); });
+          if (videoId && isOurId(videoId)) stream.getVideoTracks().forEach(function (t) { reportId(t, videoId); });
+        } catch (e) {}
         return stream;
       });
     });
+    if (origEnum) {
+      hidden(MediaDevices.prototype, 'enumerateDevices', function () {
+        return origEnum.apply(this, arguments).then(augmentDevices, function () { return augmentDevices([]); });
+      });
+    }
     if (typeof MediaStreamTrack !== 'undefined') {
       var origClone = MediaStreamTrack.prototype.clone;
       hidden(MediaStreamTrack.prototype, 'clone', function () {
@@ -408,7 +534,32 @@
         return c;
       });
     }
+    if (isTop) {
+      // Called natively when a Bluetooth/wired headset connects or disconnects.
+      hidden(window, '__wdDevicesChanged', function () {
+        try { navigator.mediaDevices.dispatchEvent(new Event('devicechange')); } catch (e) {}
+      });
+    }
   }
+
+  // Speaker selection (setSinkId) -> Android audio route. Always succeeds, so a
+  // phone-only "speaker" never makes Teams give up on audio output.
+  var patchSink = function (proto) {
+    if (!proto) return;
+    var orig = proto.setSinkId;
+    hidden(proto, 'setSinkId', function (id) {
+      var el = this;
+      var sid = typeof id === 'string' ? id : '';
+      if (ROUTE_IDS[sid]) call('setRoute', ROUTE_IDS[sid]);
+      try { Object.defineProperty(el, 'sinkId', { value: sid, configurable: true, enumerable: true }); } catch (e) {}
+      if (typeof orig === 'function') {
+        try { return Promise.resolve(orig.call(el, '')).then(function () {}, function () {}); } catch (e) {}
+      }
+      return Promise.resolve();
+    });
+  };
+  try { if (typeof HTMLMediaElement !== 'undefined') patchSink(HTMLMediaElement.prototype); } catch (e) {}
+  try { if (typeof AudioContext !== 'undefined') patchSink(AudioContext.prototype); } catch (e) {}
 
   // Ringtone heuristic: a looping sound with a ring-like name while hidden.
   if (typeof HTMLMediaElement !== 'undefined') {
@@ -469,6 +620,72 @@
     hidden(window, '__wdPermissionResult', function () {
       var list = pendingPermission.splice(0, pendingPermission.length);
       list.forEach(function (fn) { try { fn(); } catch (e) {} });
+    });
+  }
+
+  // Incoming call shown on screen (Accept/Decline buttons) while Teams is in the
+  // background: Teams doesn't always raise a browser notification for calls, so watch
+  // for its call screen and let Android ring. DOM changes are not timer-throttled in
+  // hidden pages, so this reacts immediately.
+  if (isTop && CFG.site === 'teams' && typeof MutationObserver !== 'undefined') {
+    var ringingUi = false;
+    var scanQueued = false;
+    var ACCEPT = /\b(accept|answer)\b/i;
+    var DECLINE = /\b(decline|reject|dismiss)\b/i;
+    var CALLISH = /call|audio|video/i;
+    var labelOf = function (el) {
+      return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('data-tid')].join(' ');
+    };
+    var scanCall = function () {
+      scanQueued = false;
+      if (document.visibilityState === 'visible' && !ringingUi) return;
+      var acc = null, dec = null;
+      var btns = document.querySelectorAll('button[aria-label],button[title],button[data-tid],[role="button"][aria-label]');
+      for (var i = 0; i < btns.length; i++) {
+        var l = labelOf(btns[i]);
+        if (!acc && ACCEPT.test(l) && CALLISH.test(l)) acc = btns[i];
+        else if (!dec && DECLINE.test(l)) dec = btns[i];
+      }
+      var now = !!(acc && dec);
+      if (now === ringingUi) return;
+      ringingUi = now;
+      var who = '';
+      if (now) {
+        var box = acc.closest('[role="dialog"],[role="alertdialog"],[role="alert"],[role="region"]') || acc.parentElement;
+        who = (box && box.innerText || '').split('\n').map(function (x) { return x.trim(); })
+          .filter(function (x) { return x && !ACCEPT.test(x) && !DECLINE.test(x); }).slice(0, 2).join(' - ').slice(0, 120);
+      }
+      call('callSignal', now ? 'ringing_ui' : 'ringing_end', who);
+    };
+    var queueScan = function () { if (!scanQueued) { scanQueued = true; Promise.resolve().then(scanCall); } };
+    var startCallWatch = function () {
+      try { new MutationObserver(queueScan).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label', 'hidden', 'style'] }); } catch (e) {}
+    };
+    if (document.documentElement) startCallWatch(); else document.addEventListener('DOMContentLoaded', startCallWatch);
+    document.addEventListener('visibilitychange', queueScan);
+  }
+
+  // Best-effort "who wrote" for unread-count notifications: the first unread item in the
+  // chat / mail list, read from its accessibility label.
+  if (isTop) {
+    hidden(window, '__wdUnreadPreview', function () {
+      try {
+        var noise = /^(unread|unread message|new|has unread messages?|\d+ unread( messages?)?|chat|message|selected|pinned|muted)$/i;
+        var cands = document.querySelectorAll('[aria-label*="nread" i]');
+        for (var i = 0; i < cands.length && i < 300; i++) {
+          var el = cands[i];
+          var lab = String(el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+          if (lab.length < 8 || lab.length > 800) continue;
+          var role = el.getAttribute('role') || '';
+          if (!/treeitem|option|listitem|row|link|button|gridcell/.test(role) &&
+              !(el.closest && el.closest('[role="tree"],[role="listbox"],[role="list"],[role="grid"],[role="treegrid"]'))) continue;
+          var parts = lab.split(/,|;| - |·/).map(function (x) { return x.trim(); })
+            .filter(function (x) { return x && !noise.test(x); });
+          if (!parts.length) continue;
+          return { title: parts[0].slice(0, 80), body: parts.slice(1, 4).join(' - ').slice(0, 240) };
+        }
+      } catch (e) {}
+      return null;
     });
   }
 

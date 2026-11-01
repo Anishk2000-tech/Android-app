@@ -33,6 +33,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -62,6 +63,12 @@ public final class Notifier {
     private final Map<String, Integer> mByJsId = new HashMap<>();
     private String mCallAlertKey;
     private long mLastRingAlert;
+    /** Last unread count per site, and when the site last raised a real web notification. */
+    private final Map<Site, Integer> mUnread = new EnumMap<>(Site.class);
+    private final Map<Site, Integer> mAnnounced = new EnumMap<>(Site.class);
+    private final Map<Site, Long> mLastWebNotification = new EnumMap<>(Site.class);
+    private static final long FALLBACK_DELAY_MS = 3500;
+    private static final long REAL_NOTIFICATION_WINDOW_MS = 12000;
 
     public static synchronized Notifier get(Context c) {
         if (sInstance == null) sInstance = new Notifier(c.getApplicationContext());
@@ -137,6 +144,9 @@ public final class Notifier {
         String key = site.key + "|" + (tag == null || tag.isEmpty() ? "id:" + jsId : "tag:" + tag);
         final int id = idFor(key);
         mByJsId.put(site.key + "|" + jsId, id);
+        // A real notification from the site: it replaces WorkDeck's unread-count fallback.
+        mLastWebNotification.put(site, SystemClock.elapsedRealtime());
+        mNm.cancel(unreadId(site));
         final Notification.Builder b = baseBuilder(site, site == Site.TEAMS ? CH_TEAMS : CH_OUTLOOK)
                 .setContentTitle(title.isEmpty() ? mApp.getString(site.titleRes) : title)
                 .setContentText(body)
@@ -171,6 +181,7 @@ public final class Notifier {
 
     /** Clears notifications of a site (e.g. when the user opens it). */
     public void clearSite(Site site) {
+        mNm.cancel(unreadId(site));
         String prefix = site.key + "|";
         for (Map.Entry<String, Integer> e : new HashMap<>(mByJsId).entrySet()) {
             if (e.getKey().startsWith(prefix)) {
@@ -218,7 +229,127 @@ public final class Notifier {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
+    // ------------------------------------------------------------------ unread-count fallback
+
+    static int unreadId(Site site) {
+        return idFor(site.key + "|unread");
+    }
+
+    /** A page (re)loaded: its first unread count is a baseline, not news. */
+    public void resetUnreadBaseline(Site site) {
+        mUnread.remove(site);
+        mAnnounced.remove(site);
+    }
+
+    /**
+     * The site's unread count changed (page title or app badge). Teams on the web does
+     * not always raise a browser notification, so when the count goes UP while the user
+     * isn't looking, WorkDeck posts one itself - unless the site's own notification
+     * arrives within a few seconds.
+     */
+    public void onUnreadChanged(final com.workdeck.app.web.BrowserTab tab, final int count) {
+        final Site site = tab.site;
+        Integer prevObj = mUnread.get(site);
+        mUnread.put(site, count);
+        boolean freshPage = SystemClock.elapsedRealtime() - tab.loadedAt() < 20000;
+        if (freshPage) {
+            mAnnounced.put(site, count); // counts shown while a page is still loading are not news
+            return;
+        }
+        // No change seen yet means the page has been sitting at zero.
+        int prev = prevObj == null ? 0 : prevObj;
+        Integer announcedObj = mAnnounced.get(site);
+        final int announced = announcedObj == null ? prev : announcedObj;
+        if (count < announced) {
+            // Titles sometimes flicker; only accept a drop that sticks.
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    Integer now = mUnread.get(site);
+                    Integer ann = mAnnounced.get(site);
+                    if (now != null && ann != null && now < ann) {
+                        mAnnounced.put(site, now);
+                        if (now <= 0) mNm.cancel(unreadId(site));
+                    }
+                }
+            }, 6000);
+            return;
+        }
+        if (count == announced) return;
+        mAnnounced.put(site, count);
+        if (UiState.isLookingAt(site) || !Prefs.get(mApp).notificationsEnabled(site)) return;
+        Log.i(TAG, site.key + ": unread " + announced + " -> " + count);
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Long real = mLastWebNotification.get(site);
+                if (real != null && SystemClock.elapsedRealtime() - real < REAL_NOTIFICATION_WINDOW_MS) return;
+                final Integer now = mUnread.get(site);
+                if (now == null || now <= 0 || UiState.isLookingAt(site)) return;
+                tab.evaluate("window.__wdUnreadPreview ? JSON.stringify(window.__wdUnreadPreview()) : 'null'",
+                        new android.webkit.ValueCallback<String>() {
+                            @Override
+                            public void onReceiveValue(String value) {
+                                postUnread(site, now, parsePreview(value));
+                            }
+                        });
+            }
+        }, FALLBACK_DELAY_MS);
+    }
+
+    private static String[] parsePreview(String evaluated) {
+        try {
+            if (evaluated == null || "null".equals(evaluated)) return null;
+            // evaluateJavascript returns a JSON-encoded string containing our JSON.
+            String inner = new org.json.JSONTokener(evaluated).nextValue().toString();
+            if ("null".equals(inner)) return null;
+            org.json.JSONObject o = new org.json.JSONObject(inner);
+            String t = o.optString("title").trim();
+            return t.isEmpty() ? null : new String[] {t, o.optString("body").trim()};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private void postUnread(Site site, int count, String[] preview) {
+        boolean teams = site == Site.TEAMS;
+        String countText = mApp.getString(teams ? R.string.unread_teams_text : R.string.unread_outlook_text, count);
+        String title = preview != null ? preview[0]
+                : mApp.getString(teams ? R.string.unread_teams_title : R.string.unread_outlook_title);
+        String body = preview != null && !preview[1].isEmpty() ? preview[1] + "\n" + countText : countText;
+        int id = unreadId(site);
+        Notification.Builder b = baseBuilder(site, teams ? CH_TEAMS : CH_OUTLOOK)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setNumber(count)
+                .setAutoCancel(true)
+                .setCategory(teams ? Notification.CATEGORY_MESSAGE : Notification.CATEGORY_EMAIL)
+                .setContentIntent(openIntent(site, null, id))
+                .setGroup("workdeck_" + site.key);
+        Log.i(TAG, site.key + ": unread fallback notification (" + count + ", preview=" + (preview != null) + ")");
+        post(id, b);
+    }
+
     // ------------------------------------------------------------------ calls
+
+    /**
+     * Teams is showing its incoming-call screen (Accept/Decline) in the background, or
+     * stopped showing it (answered elsewhere, missed, declined).
+     */
+    public void onCallScreen(Site site, boolean ringing, String who) {
+        if (site != Site.TEAMS) return;
+        if (!ringing) {
+            // The call screen went away (answered, declined, missed): stop ringing.
+            if (mCallAlertKey != null) cancelCallAlert();
+            return;
+        }
+        if (!Prefs.get(mApp).callAlerts() || UiState.isLookingAt(site)) return;
+        if (mCallAlertKey != null) return; // already ringing for this call
+        String title = who == null || who.trim().isEmpty() ? mApp.getString(R.string.incoming_call) : who.trim();
+        Log.i(TAG, "incoming call screen detected");
+        showCallAlert(site, "ui", title, mApp.getString(R.string.incoming_call_text));
+    }
 
     public void showCallAlert(Site site, String jsId, String title, String body) {
         mCallAlertKey = site.key + "|" + jsId;
