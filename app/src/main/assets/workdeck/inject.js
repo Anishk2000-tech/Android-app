@@ -375,7 +375,22 @@
     if (!raw) return null;
     try { return JSON.parse(raw); } catch (e) { return null; }
   };
-  var fakeStatus = function (name, state) {
+  // Android WebView has no Permissions API at all (navigator.permissions is undefined),
+  // so pages like Teams can't learn that the mic/camera are usable. Provide one.
+  if (typeof window.PermissionStatus === 'undefined') {
+    hidden(window, 'PermissionStatus', class PermissionStatus extends EventTarget {});
+  }
+  if (!navigator.permissions) {
+    var PermissionsCtor = (typeof window.Permissions === 'function') ? window.Permissions : class Permissions {};
+    if (typeof window.Permissions === 'undefined') hidden(window, 'Permissions', PermissionsCtor);
+    var permsObj = Object.create(PermissionsCtor.prototype);
+    hidden(permsObj, 'query', function (desc) {
+      if (!desc || typeof desc.name !== 'string') return Promise.reject(new TypeError("Failed to execute 'query' on 'Permissions'"));
+      return Promise.resolve(fakeStatus(desc.name, 'prompt'));
+    });
+    getter(Navigator.prototype, 'permissions', function () { return permsObj; });
+  }
+  function fakeStatus(name, state) {
     var st;
     try { st = Object.create(PermissionStatus.prototype); } catch (e) { st = {}; }
     own(st, 'state', state);
@@ -386,7 +401,7 @@
     hidden(st, 'removeEventListener', function () {});
     hidden(st, 'dispatchEvent', function () { return true; });
     return st;
-  };
+  }
   if (navigator.permissions && navigator.permissions.query) {
     var origQuery = navigator.permissions.query;
     hidden(navigator.permissions, 'query', function (desc) {

@@ -432,6 +432,25 @@ const WEBVIEW_ENUMERATE = `MediaDevices.prototype.enumerateDevices = function ()
   return Promise.resolve(['audioinput', 'videoinput', 'audiooutput'].map((k) => ({ kind: k, deviceId: '', label: '', groupId: '' })));
 };`;
 
+test('Permissions API is provided when WebView lacks it (mic/camera/notifications answered)', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript(`Object.defineProperty(Navigator.prototype, 'permissions', { get: () => undefined, configurable: true });
+    delete window.Permissions; delete window.PermissionStatus;`);
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/mobile.html');
+  const r = await page.evaluate(async () => {
+    const out = { has: !!navigator.permissions, ctor: typeof Permissions, statusCtor: typeof PermissionStatus };
+    for (const n of ['microphone', 'camera', 'notifications', 'geolocation']) out[n] = (await navigator.permissions.query({ name: n })).state;
+    out.isStatus = (await navigator.permissions.query({ name: 'camera' })) instanceof PermissionStatus;
+    return out;
+  });
+  assert.deepStrictEqual(r, { has: true, ctor: 'function', statusCtor: 'function', microphone: 'granted', camera: 'granted',
+    notifications: 'granted', geolocation: 'prompt', isStatus: true });
+  await ctx.close();
+});
+
 test('enumerateDevices lists phone mic, front/back cameras and Android audio routes', async (b, base) => {
   const ctx = await b.newContext();
   await ctx.addInitScript(WEBVIEW_ENUMERATE);
