@@ -113,6 +113,9 @@ adb shell dumpsys activity recents | grep -c "$PKG" > "$OUT/recents-count.txt" |
 echo "WorkDeck tasks left in Recents: $(cat $OUT/recents-count.txt)"
 sleep 20
 check "process survives being swiped away from Recents" "adb shell pidof $PKG"
+SPEED=$(timeout 90 node tests/android/cdp-eval.js "new Promise((res) => { let n = 0; const id = setInterval(() => n++, 100); setTimeout(() => { clearInterval(id); res(n); }, 4000); })")
+echo "timer ticks in 4 s with WorkDeck swiped away (full speed ~40, slowed-down page ~4): $SPEED"
+check "swiped away from Recents: pages still run at full speed (instant notifications)" "[ \"\${SPEED:-0}\" -ge 25 ] 2>/dev/null"
 adb shell dumpsys activity services "$PKG" > "$OUT/recents-services.txt"
 check "foreground service survives the swipe" "grep -q 'isForeground=true' $OUT/recents-services.txt"
 adb shell am start -W -n "$PKG/.ui.MainActivity"

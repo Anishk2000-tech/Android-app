@@ -1021,7 +1021,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 if (w.getVisibility() != View.VISIBLE) w.setVisibility(View.VISIBLE);
                 t.setDrawn(UiState.activityVisible);
             } else {
-                t.park();
+                t.park(mTabs.parkingLot(mWebContainer));
             }
         }
     }

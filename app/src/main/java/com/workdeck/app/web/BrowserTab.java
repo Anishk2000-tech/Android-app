@@ -219,7 +219,8 @@ public final class BrowserTab {
         wv.setDownloadListener(new TabDownloads(wv));
         registerScript();
         layoutHeadless();
-        keepAwake(); // created off screen (e.g. by the background service): awake from the start
+        // Created off screen (e.g. by the background service): park it awake from the start.
+        park(TabManager.get(mApp).parkingLot(null));
         Log.i(TAG, key + ": WebView created in profile " + account.profile + ", docStart=" + mDocStartSupported
                 + (mProfileMissing ? ", PROFILE UNSUPPORTED" : ""));
     }
@@ -318,16 +319,25 @@ public final class BrowserTab {
     public void attach(ViewGroup container) {
         if (mWebView == null) return;
         mParked = false;
+        mWebView.setTranslationX(0);
         ViewGroup parent = (ViewGroup) mWebView.getParent();
-        if (parent == container) return;
+        if (parent == container) {
+            ViewGroup.LayoutParams lp = mWebView.getLayoutParams();
+            if (lp == null || lp.width != ViewGroup.LayoutParams.MATCH_PARENT) {
+                mWebView.setLayoutParams(new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            return;
+        }
         if (parent != null) parent.removeView(mWebView);
         container.addView(mWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    /** The activity is going away: keep the page alive (and awake) without it. */
     public void detach() {
         if (mWebView == null) return;
-        park();
+        park(TabManager.get(mApp).parkingLot(null));
         setHost(null);
         cookies().flush();
     }
@@ -341,18 +351,31 @@ public final class BrowserTab {
      * so new messages, mail and calls would arrive late. A detached WebView that the
      * engine still considers visible keeps full speed and costs no drawing.
      */
-    public void park() {
+    public void park(ViewGroup lot) {
         if (mWebView == null) return;
         setDrawn(false);
         ViewGroup parent = (ViewGroup) mWebView.getParent();
-        if (mParked && parent == null) return;
-        if (parent != null) {
-            // Visibility changes only reach the engine while attached: make it visible first.
-            if (mWebView.getVisibility() != View.VISIBLE) mWebView.setVisibility(View.VISIBLE);
-            parent.removeView(mWebView); // (this tells the engine "window gone")
+        if (mParked && parent == lot) return;
+        // Visibility changes only reach the engine while attached: make it visible first.
+        if (parent != null && mWebView.getVisibility() != View.VISIBLE) mWebView.setVisibility(View.VISIBLE);
+        if (lot == null) {
+            // Nowhere to keep it attached: detached pages are slowed down by the engine.
+            if (parent != null) parent.removeView(mWebView);
+            mParked = true;
+            layoutHeadless();
+            keepAwake();
+            return;
         }
+        DisplayMetrics dm = mApp.getResources().getDisplayMetrics();
+        if (parent != lot) {
+            if (parent != null) parent.removeView(mWebView);
+            // Same size as on screen (pages lay out the same), placed off the window so it's
+            // never drawn: attached and "visible" for the engine, invisible for everyone.
+            lot.addView(mWebView, new FrameLayout.LayoutParams(dm.widthPixels, dm.heightPixels));
+        }
+        mWebView.setTranslationX(-4f * Math.max(dm.widthPixels, 1));
+        if (mWebView.hasFocus()) mWebView.clearFocus();
         mParked = true;
-        layoutHeadless();
         keepAwake();
     }
 
@@ -412,9 +435,16 @@ public final class BrowserTab {
         int index = parent == null ? -1 : parent.indexOfChild(mWebView);
         destroy();
         mError = null;
-        create();
-        if (parent != null) parent.addView(mWebView, index, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        create(); // (parks the new WebView off screen)
+        ViewGroup now = (ViewGroup) mWebView.getParent();
+        if (parent != null && now != parent) {
+            // It was on screen: put the rebuilt page back there.
+            if (now != null) now.removeView(mWebView);
+            mParked = false;
+            parent.addView(mWebView, Math.min(Math.max(index, 0), parent.getChildCount()), new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            mWebView.setTranslationX(0);
+        }
         mStarted = true;
         loadHome();
         changed();

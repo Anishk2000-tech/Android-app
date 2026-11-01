@@ -502,6 +502,9 @@ async function connectAll() {
   await openApp('CRAFTWW', 'Teams');
   await sleep(2000);
   const byUrl = async (re) => { const p = (await pages()).find((x) => re.test(x.url)); return p ? connect(p.webSocketDebuggerUrl) : null; };
+  const stageLog = sh('adb logcat -d -s WorkDeck/Stage').split('\n').filter((l) => /stage/.test(l)).pop() || '';
+  console.log('  background stage: ' + (stageLog.trim().slice(-60) || 'no log line'));
+  check(/background stage ready/.test(stageLog), 'WorkDeck\'s invisible background window is in place (keeps off-screen pages attached)', stageLog.trim().slice(-60));
   const shownTeams = await byUrl(/wd-ci-chat/);
   const parkedOutlook = await byUrl(/wd-ci-inbox/);
   if (!shownTeams || !parkedOutlook) {

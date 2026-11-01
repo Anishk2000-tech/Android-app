@@ -164,19 +164,31 @@ public final class TabManager {
     public void setUiVisible(boolean visible) {
         mUiVisible = visible;
         mMain.removeCallbacks(mKeepAwake);
-        if (!visible) mMain.postDelayed(mKeepAwake, 1200);
+        mMain.postDelayed(mKeepAwake, visible ? 60000 : 1200);
     }
 
     private final Runnable mKeepAwake = new Runnable() {
         @Override
         public void run() {
             for (BrowserTab t : mTabs.values()) {
-                t.setDrawn(false);
-                t.keepAwake();
+                if (!mUiVisible) t.setDrawn(false);
+                if (!mUiVisible || !t.isDrawn()) t.keepAwake();
             }
-            if (!mUiVisible) mMain.postDelayed(this, 60000);
+            mMain.postDelayed(this, 60000);
         }
     };
+
+    /**
+     * Where pages that aren't on screen are kept attached (and so awake): WorkDeck's
+     * invisible background window, or - if this phone doesn't allow that - off screen
+     * inside {@code fallback} (the activity's web area). Null when Instant notifications
+     * is off (pages are then simply detached and the engine lets them sleep).
+     */
+    public android.view.ViewGroup parkingLot(android.view.ViewGroup fallback) {
+        if (!Prefs.get(mApp).instantNotifications()) return null;
+        android.view.ViewGroup stage = BackgroundStage.get(mApp).container();
+        return stage != null ? stage : fallback;
+    }
 
     /** The "Instant notifications" setting changed. */
     public void applyAwakeSetting() {
