@@ -219,20 +219,23 @@
       registry[id] = this;
       var self = this;
       var icon = this.icon;
-      var go = function (iconUrl) {
-        if (permission() !== 'granted') { delete registry[id]; fire(self, 'error'); return; }
+      // Post to Android right away (not after a timer): the page may navigate away
+      // immediately after creating the notification. Events still fire asynchronously.
+      var send = function (iconUrl) {
+        if (permission() !== 'granted') { delete registry[id]; return false; }
         var payload = {
           id: id, title: self.title, body: self.body, tag: self.tag, icon: iconUrl || '',
           requireInteraction: self.requireInteraction, silent: self.silent, renotify: self.renotify,
           origin: location.origin, sw: self.__wdSw
         };
         call('notify', JSON.stringify(payload));
-        fire(self, 'show');
+        return true;
       };
+      var after = function (sent) { setTimeout(function () { fire(self, sent ? 'show' : 'error'); }, 0); };
       if (icon.indexOf('blob:') === 0) {
-        blobToDataUrl(icon, 262144).then(go, function () { go(''); });
+        blobToDataUrl(icon, 262144).then(function (d) { after(send(d)); }, function () { after(send('')); });
       } else {
-        setTimeout(function () { go(icon.indexOf('data:') === 0 && icon.length > 350000 ? '' : icon); }, 0);
+        after(send(icon.indexOf('data:') === 0 && icon.length > 350000 ? '' : icon));
       }
     }
     close() {

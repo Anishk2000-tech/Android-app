@@ -252,7 +252,7 @@ async function pageFor(pred) {
     if (!outlook) continue;
     o = await outlook.eval(`({ ua: navigator.userAgent, platform: navigator.platform, mobile: navigator.userAgentData && navigator.userAgentData.mobile, url: location.href })`);
     outlook.close();
-    if (o && /Android/.test(o.ua || '')) break;
+    if (o && /Android/.test(o.ua || '') && o.mobile === true) break;
   }
   if (o) {
     console.log(JSON.stringify(o));
