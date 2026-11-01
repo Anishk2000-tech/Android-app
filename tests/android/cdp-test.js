@@ -266,10 +266,18 @@ async function connectAll() {
     await teams.eval(`navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: 'default' } } }).then((st) => { window.__ciCamStream = st; return 'ok'; }, (e) => 'ERR:' + e.name)`, 20000);
   }
   await sleep(6000);
+  // Pick a speaker the phone actually has (emulators often have no earpiece).
+  const offered = dl.filter((d) => /^audiooutput:/.test(d)).join(',');
+  const hasEarpiece = /Phone earpiece/.test(offered);
   const sink = await teams.eval(`(async () => { const a = new Audio(); await a.setSinkId('wd-route-earpiece'); return a.sinkId; })()`);
-  await sleep(2500);
+  await sleep(6000); // long enough for WorkDeck's route checker to have run
   const routeLog = sh('adb logcat -d -s WorkDeck/Call').split('\n').filter((l) => /route[= ]/.test(l)).pop() || '';
-  check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio', [sink, routeLog.trim().slice(-45)]);
+  if (hasEarpiece) {
+    check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio (and it stays there)', [sink, routeLog.trim().slice(-45)]);
+  } else {
+    console.log('  NOTE: this emulator has no earpiece (offered: ' + offered + ')');
+    check(/route=SPEAKER/.test(routeLog), 'a speaker the phone doesn\'t have falls back to one it has (speaker)', routeLog.trim().slice(-45));
+  }
   await teams.eval(`window.__ciCamStream && window.__ciCamStream.getTracks().forEach((t) => t.stop()), 'ok'`);
   await sleep(8000);
 
@@ -441,8 +449,11 @@ async function connectAll() {
       responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }], body: Buffer.from(chatHtml).toString('base64') }));
     await ct.c.send('Page.navigate', { url: CHAT });
     await sleep(4000);
+    // Like a finger on the page: the WebView gets Android's focus, then the message box.
+    sh('adb shell input tap 540 1000');
+    await sleep(800);
     await ct.c.eval("document.getElementById('box').focus(), 'ok'", 8000);
-    await sleep(2000);
+    await sleep(2500);
     check(/Attach files from phone/.test(texts()), 'typing in a message box shows WorkDeck\'s attach (📎) button');
     shot('10-attach-button');
     sh(`adb shell "run-as ${PKG} sh -c 'mkdir -p cache; echo quarterly-numbers > cache/ci-report.txt'"`);
