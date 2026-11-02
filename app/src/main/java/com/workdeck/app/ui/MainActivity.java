@@ -5,6 +5,9 @@ import android.app.AlertDialog;
 import android.app.KeyguardManager;
 import android.app.PictureInPictureParams;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.content.ClipData;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -153,6 +156,18 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     /** Short menus/dialogs over a page don't count as looking away. */
     private static final long FOCUS_LOSS_GRACE_MS = 2000;
     private long mFocusLostAt;
+    /** Brought to the front by a ringing call (not by the user): not looked at until touched. */
+    private boolean mLaunchedForCall;
+    /** When the screen last turned on (a resume right after that wasn't the user's doing). */
+    private long mScreenOnAt;
+    private boolean mScreenReceiverOn;
+    private final BroadcastReceiver mScreenReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            if (Intent.ACTION_SCREEN_ON.equals(i.getAction())) mScreenOnAt = SystemClock.elapsedRealtime();
+            updatePresence();
+        }
+    };
     private String mAccountsSig;
     private int mNightMode;
 
@@ -190,6 +205,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         showTab(initial, initial.preferredSite());
         mCall.addListener(this);
         onCallStateChanged(mCall.inCall(), mCall.route());
+        try {
+            IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_ON);
+            f.addAction(Intent.ACTION_SCREEN_OFF);
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(mScreenReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(mScreenReceiver, f);
+            mScreenReceiverOn = true;
+        } catch (Throwable t) {
+            android.util.Log.w("WorkDeck/Main", "screen on/off not observed", t);
+        }
         handleIntent(getIntent());
     }
 
@@ -223,6 +247,11 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (mWebId != null && mAccount.webTab(mWebId) == null) showTab(mAccount, mAccount.preferredSite());
         UiState.activityResumed = true;
         UiState.visibleTab = currentKey();
+        // Coming back to WorkDeck counts as looking - unless a ringing call brought it up,
+        // or the screen has only just turned on (e.g. by itself, on a phone without lock).
+        if (!mLaunchedForCall && SystemClock.elapsedRealtime() - mScreenOnAt > 3000) {
+            mLastInteraction = SystemClock.elapsedRealtime();
+        }
         releaseLockScreenIfIdle();
         updatePresence();
         if (mPrefs.keepAlive() || mCall.inCall()) {
@@ -283,6 +312,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             mTabs.setUiVisible(false); // keeps every page awake while WorkDeck isn't on screen
         }
         releaseLockScreenIfIdle();
+        mLaunchedForCall = false;
         super.onStop();
     }
 
@@ -296,6 +326,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             for (BrowserTab t : mTabs.allTabs()) t.detach();
             mTabs.setHost(null);
             UiState.visibleTab = null;
+        }
+        UiState.userPresent = false;
+        mMain.removeCallbacks(mPresenceCheck);
+        if (mScreenReceiverOn) {
+            try {
+                unregisterReceiver(mScreenReceiver);
+            } catch (Throwable ignored) {
+            }
+            mScreenReceiverOn = false;
         }
         WorkDeckApp.setMainActivity(null);
         super.onDestroy();
@@ -1057,6 +1096,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     public void onUserInteraction() {
         super.onUserInteraction();
+        mLaunchedForCall = false;
         boolean wasIdle = SystemClock.elapsedRealtime() - mLastInteraction >= IDLE_MS;
         mLastInteraction = SystemClock.elapsedRealtime();
         if (wasIdle || !UiState.userPresent) updatePresence();
@@ -1267,6 +1307,14 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         Account account = mAccounts.find(intent.getStringExtra(EXTRA_ACCOUNT));
         if (account == null) account = mAccount != null ? mAccount : mAccounts.active();
         final String notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID);
+        if (ACTION_INCOMING_CALL.equals(action)) {
+            // The call alert turned the screen on: nobody is necessarily looking yet.
+            mLaunchedForCall = true;
+            mLastInteraction = SystemClock.elapsedRealtime() - IDLE_MS;
+        } else {
+            mLaunchedForCall = false; // opened by the user (launcher, notification, share...)
+            mLastInteraction = SystemClock.elapsedRealtime();
+        }
         if (ACTION_OPEN_SITE.equals(action) && site != null) {
             showTab(account, site);
             final BrowserTab t = mTabs.tab(account, site);

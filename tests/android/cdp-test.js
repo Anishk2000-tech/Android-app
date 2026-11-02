@@ -585,6 +585,7 @@ async function connectAll() {
     check(pBg && pBg.vis === 'hidden' && pBg.focus === false && pBg.seen === 0, 'WorkDeck in the background: Teams is hidden, unfocused, nothing on screen (nothing gets "Seen")', pBg);
     await chat.eval(`window.__ciRing = new Notification('CI Ringer', { body: 'Incoming call', requireInteraction: true }), 'ok'`, 8000);
     const ringing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Ringer')), 10000);
+    sh('adb shell locksettings set-disabled false'); // the emulator's (swipe) lock screen
     sh('adb shell input keyevent KEYCODE_SLEEP');
     await sleep(1500);
     sh('adb shell input keyevent KEYCODE_WAKEUP');
@@ -596,18 +597,25 @@ async function connectAll() {
     const overLock = /not looking at a1\|teams \(locked\)/.test(recent);
     const pLock = await chat.eval(presence, 10000);
     console.log('  ringing=' + ringing + ', over the lock screen=' + overLock + ': ' + JSON.stringify(pLock));
-    if (overLock) {
-      check(pLock && pLock.vis === 'hidden' && pLock.focus === false && pLock.seen === 0, 'shown over the lock screen for a ringing call: Teams is hidden, unfocused, nothing on screen (nothing gets "Seen")', pLock);
-    } else {
-      console.log('  NOTE: this emulator did not show its lock screen - over-lock-screen check skipped\n  ' + recent.replace(/\n/g, '\n  '));
-    }
+    if (!overLock) console.log('  NOTE: no lock screen showed on this emulator\n  ' + recent.replace(/\n/g, '\n  '));
+    // With or without a lock screen: brought up by the call, not by the user.
+    check(pLock && pLock.vis === 'hidden' && pLock.focus === false && pLock.seen === 0,
+      'brought to the front by a ringing call (over the lock screen' + (overLock ? '' : ' / screen woken') + '): Teams is hidden, unfocused, nothing on screen (nothing gets "Seen")', pLock);
     shot('12-over-lock-screen');
     await chat.eval(`window.__ciRing.close(), 'ok'`, 8000);
     const released = await waitFor(() => /no longer shown over the lock screen/.test(sh('adb logcat -d -s WorkDeck/Main')), 8000);
     check(released, 'when the ringing stops, WorkDeck is no longer shown over the lock screen');
     sh('adb shell wm dismiss-keyguard');
     sh('adb shell input keyevent 82');
+    await sleep(1500);
+    sh('adb shell locksettings set-disabled true');
+    sh('adb shell wm dismiss-keyguard');
+    sh(`adb shell am start -W -n ${PKG}/.ui.MainActivity`);
     await sleep(2000);
+    sh('adb shell input tap 540 900'); // the user picks the phone up and touches the chat
+    await sleep(2500);
+    const pBack = await chat.eval(presence, 10000);
+    check(pBack && pBack.vis === 'visible' && pBack.focus === true && pBack.seen >= 1, 'unlocked and touched: the chat counts as looked at again', pBack);
     chat.close();
     console.log('  presence log: ' + sh('adb logcat -d -s WorkDeck/Main').split('\n').filter((l) => /looking|lock screen/.test(l)).slice(-8).join('\n    '));
   }
