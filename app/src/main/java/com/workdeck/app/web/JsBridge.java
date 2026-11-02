@@ -198,10 +198,13 @@ final class JsBridge {
         });
     }
 
-    /** Is this page on the user's screen right now? ("0": report the page as hidden.) */
+    /**
+     * Is the user looking at this page right now? ("0": the page is told it's hidden and
+     * not focused, so it doesn't mark messages as read.) Unknown callers get "0".
+     */
     @JavascriptInterface
     public String drawn(String token) {
-        if (!ok(token)) return "1";
+        if (!ok(token)) return "0";
         return mTab.isDrawn() ? "1" : "0";
     }
 

@@ -816,6 +816,85 @@ test('a page that is not on screen reports itself hidden and still gets (emulate
   await ctx.close();
 });
 
+test('while the user is not looking, Teams cannot tell otherwise: hidden, not focused, nothing "on screen"', async (b, base) => {
+  // Teams marks messages as read ("Seen") when it believes the user is looking at the chat.
+  PAGES['/chat.html'] = `<!doctype html><html><head><title>Chat | Teams</title></head><body>
+      <div id="m1" style="height:80px">new message</div><div id="m2" style="height:80px">another</div></body></html>`;
+  const ctx = await b.newContext();
+  await ctx.addInitScript(BRIDGE_MOCK.replace("window.__calls = [];", "window.__calls = []; window.__drawn = '0';"));
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/chat.html');
+  await page.bringToFront();
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const log = [];
+    window.addEventListener('focus', () => log.push('focus'));
+    window.onblur = () => log.push('blur');
+    const seen = [];
+    let sameObserver = null;
+    const io = new IntersectionObserver((entries, obs) => {
+      sameObserver = obs === io;
+      entries.forEach((e) => seen.push(e.target.id + ':' + e.isIntersecting));
+    });
+    io.observe(document.getElementById('m1'));
+    io.observe(document.getElementById('m2'));
+    await wait(400);
+    const away = { focus: document.hasFocus(), vis: document.visibilityState, seen: seen.length };
+    window.dispatchEvent(new FocusEvent('focus')); // what the engine sends when the page gets focus
+    const focusWhileAway = log.slice();
+    io.unobserve(document.getElementById('m2')); // the page stops watching one while away
+    window.__wdDrawn(true);
+    await wait(400);
+    const back = { focus: document.hasFocus(), vis: document.visibilityState, seen: seen.slice(), sameObserver: sameObserver, log: log.slice() };
+    window.__wdDrawn(false);
+    const left = { focus: document.hasFocus(), vis: document.visibilityState, log: log.slice() };
+    return { away, focusWhileAway, back, left, isIO: io instanceof IntersectionObserver, name: IntersectionObserver.name };
+  });
+  assert.deepStrictEqual(r.away, { focus: false, vis: 'hidden', seen: 0 }, 'away: hidden, unfocused, no message reported on screen');
+  assert.deepStrictEqual(r.focusWhileAway, [], 'a focus event while away does not reach the page');
+  assert.strictEqual(r.back.vis, 'visible');
+  assert.strictEqual(r.back.focus, true, 'looking again: focused');
+  assert.deepStrictEqual(r.back.seen, ['m1:true'], 'looking again: the message is reported on screen (the unobserved one is not)');
+  assert.strictEqual(r.back.sameObserver, true, 'callback gets its own observer');
+  assert.deepStrictEqual(r.back.log, ['focus'], 'looking again: the page gets its focus event');
+  assert.deepStrictEqual(r.left, { focus: false, vis: 'hidden', log: ['focus', 'blur'] }, 'looking away: blur');
+  assert.strictEqual(r.isIO, true, 'instanceof IntersectionObserver still holds');
+  assert.strictEqual(r.name, 'IntersectionObserver');
+  await ctx.close();
+});
+
+test('IntersectionObserver keeps working normally while the user looks (incl. subclasses), and without the bridge pages count as not looked at', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {}, '/chat.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    class Watch extends IntersectionObserver {
+      constructor(cb) { super(cb, { threshold: [0, 1] }); this.tagged = 'yes'; }
+      hello() { return 'hi'; }
+    }
+    const seen = [];
+    const w = new Watch((entries) => entries.forEach((e) => seen.push(e.target.id)));
+    w.observe(document.getElementById('m1'));
+    await wait(300);
+    let threw = false;
+    try { IntersectionObserver(() => {}); } catch (e) { threw = e instanceof TypeError; }
+    const d = new IntersectionObserver(() => {});
+    d.observe(document.getElementById('m2'));
+    d.disconnect();
+    return { seen, hello: w.hello(), tagged: w.tagged, inst: w instanceof IntersectionObserver, sub: w instanceof Watch, threw, focus: document.hasFocus() };
+  });
+  assert.deepStrictEqual(r, { seen: ['m1'], hello: 'hi', tagged: 'yes', inst: true, sub: true, threw: true, focus: true });
+  assert.deepStrictEqual(errors, []);
+  await ctx.close();
+  const ctx2 = await b.newContext();
+  await ctx2.addInitScript(script({})); // no WorkDeck bridge at all
+  const p2 = await ctx2.newPage();
+  await p2.goto(base + '/chat.html');
+  const v = await p2.evaluate(() => [document.visibilityState, document.hasFocus()]);
+  assert.deepStrictEqual(v, ['hidden', false], 'unknown = not looked at (never mark as read by mistake)');
+  await ctx2.close();
+});
+
 test('company sign-in policy pages ("You must use Microsoft Edge") are recognised; ordinary pages are not', async (b, base) => {
   PAGES['/ca-blocked.html'] = `<!doctype html><html><head><title>Sign in to your account</title>
     <script>window.$Config = { iErrorCode: 53005, strServiceExceptionMessage: 'AADSTS53005: Application needs to enforce Intune protection policies.' };</script>

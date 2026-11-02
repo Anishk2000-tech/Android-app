@@ -18,6 +18,12 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## What's new in 1.4.2
+* **Messages are no longer marked as read ("Seen") without you seeing them.** Teams marks a chat's new messages as read whenever it believes you're looking at that chat, and tells the sender (and a group) *Seen*. Since 1.4.0 WorkDeck keeps Teams fully awake in the background, so Teams had more chances to guess wrong — above all with the **group chat you last had open**:
+  * **Lock screen:** when a Teams call rang while the phone was locked, WorkDeck turned the screen on and showed Teams **over the lock screen**, with that chat open — and after a missed or declined call it **stayed allowed over the lock screen**, so each time the screen lit up (a notification, the power button) Teams could count the open chat as read. Now WorkDeck is shown over the lock screen only while a call rings or is in progress, and never counts as "looked at" there.
+  * **Only when you're really looking:** Teams/Outlook are told they're visible and focused only while WorkDeck is in front, the phone is unlocked, no dialog covers it, and you've touched the screen in the last 5 minutes (or you're in a call). Every signal a web app uses for "the user is reading this" follows that: page visibility, window focus, and whether a message is on screen. Off screen, in the background, on the lock screen or after you leave the phone alone, nothing is marked as read; you get a notification instead.
+* Want no *Seen* at all, even for chats you do open? That's Teams' own setting: Teams → **Settings → Privacy → Read receipts** off (it also hides other people's *Seen* from you).
+
 ## What's new in 1.4.1
 * **"You can't get there from here – You must use Microsoft Edge"** (a company's sign-in policy, e.g. OMC's *One Workplace* page) is now handled. Many companies block **phone** browsers but allow computer browsers. In **mobile view** WorkDeck presents itself as a phone browser, so such a company blocks it — in desktop view (the default) it presents a computer browser and is let in. WorkDeck now recognises the policy page, switches that account's app to a **computer identity while keeping the phone layout**, reloads it and tells you. If a company refuses computer browsers too (only its company-managed Edge app is allowed), WorkDeck explains that and offers **Open in Edge**; the page's own *Launch in Edge* button works too.
 
@@ -55,7 +61,7 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 ## 1. Install (step by step)
 
 1. **Download the APK** on your phone:
-   open **[release/WorkDeck-1.4.1.apk](release/WorkDeck-1.4.1.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
+   open **[release/WorkDeck-1.4.2.apk](release/WorkDeck-1.4.2.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
 2. Open the downloaded file (tap the download notification, or open *Files → Downloads*).
 3. If Android says *"For your security, your phone is not allowed to install unknown apps from this source"*: tap **Settings → turn on "Allow from this source"**, then go back.
 4. Tap **Install**. If **Play Protect** warns about an unknown app, tap **More details → Install anyway** (it warns about every app not from the Play Store).
@@ -137,6 +143,7 @@ The bottom bar:
 | Problem | Fix |
 |---|---|
 | No / late notifications after a while | Fix anything the yellow bar (or ⋮ → Settings → *Check notification reliability*) reports. Keep *Instant notifications* and *Reliable mode* on. ⋮ → **Setup & permissions**: everything should say *Allowed ✓*; do the phone-maker step (Autostart, battery *Unrestricted*, lock WorkDeck in Recents; Samsung: Settings → Battery → *Never sleeping apps* → add WorkDeck). See [dontkillmyapp.com](https://dontkillmyapp.com) for your phone. |
+| Teams shows messages as *Seen* / read that I haven't read | Update to 1.4.2 or later (see *What's new in 1.4.2*). Teams also marks the chat **on screen** as read while you look at it in WorkDeck. If you open WorkDeck only to check something else, the chat that was last open in Teams still counts, so leave Teams on *Activity* or the chat list. Or turn off *Seen* entirely in Teams → Settings → Privacy → *Read receipts*. Another device signed in to the same account (a PC with Teams open) also marks chats as read. |
 | Outlook mail notifications missing | Open that account's Outlook once so it starts running; check the account's settings: *Keep running for notifications* and *Outlook notifications* on. Keep Outlook's folder list or message list on its **Inbox**. |
 | OMC / ACXIOM / a new account shows *"please update Android System WebView"* | Separate sign-ins need a recent WebView. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Quit and reopen WorkDeck. The first account (CRAFTWW) keeps working meanwhile. |
 | Two accounts show the same person | They can't share a sign-in (each has its own storage) — you signed in with the same email twice. Open the account's settings → *Sign out of this account* and sign in with the right email. |

@@ -559,6 +559,59 @@ async function connectAll() {
     await sleep(2000);
   }
 
+  // 12. Messages must not be marked as read ("Seen") unless the user is really looking:
+  // only then is the chat visible, focused and "on screen" for Teams. Not in the
+  // background, and not when WorkDeck is merely shown over the lock screen because a
+  // call rings; that over-lock-screen mode ends when the ringing stops.
+  const presence = `new Promise((res) => { const seen = [];
+      const io = new IntersectionObserver((es) => es.forEach((e) => seen.push(e.isIntersecting)));
+      io.observe(document.body);
+      setTimeout(() => { io.disconnect(); res({ vis: document.visibilityState, focus: document.hasFocus(), seen: seen.length }); }, 1500); })`;
+  sh(`adb shell am start -W -n ${PKG}/.ui.MainActivity`);
+  await sleep(2000);
+  await openApp('CRAFTWW', 'Teams');
+  await sleep(1500);
+  sh('adb shell input tap 540 900'); // the user touches the chat
+  await sleep(2500);
+  const chat = await byUrl(/wd-ci-chat/);
+  if (!chat) {
+    check(false, 'stand-in Teams chat reachable for the "Seen" test');
+  } else {
+    const pOn = await chat.eval(presence, 10000);
+    check(pOn && pOn.vis === 'visible' && pOn.focus === true && pOn.seen >= 1, 'looking at Teams: the chat is visible, focused and on screen (messages can be read)', pOn);
+    sh('adb shell input keyevent KEYCODE_HOME');
+    await sleep(2500);
+    const pBg = await chat.eval(presence, 10000);
+    check(pBg && pBg.vis === 'hidden' && pBg.focus === false && pBg.seen === 0, 'WorkDeck in the background: Teams is hidden, unfocused, nothing on screen (nothing gets "Seen")', pBg);
+    await chat.eval(`window.__ciRing = new Notification('CI Ringer', { body: 'Incoming call', requireInteraction: true }), 'ok'`, 8000);
+    const ringing = await waitFor(() => wdNotifs().some((r) => r.includes('CI Ringer')), 10000);
+    sh('adb shell input keyevent KEYCODE_SLEEP');
+    await sleep(1500);
+    sh('adb shell input keyevent KEYCODE_WAKEUP');
+    await sleep(1500);
+    // What the call alert's full-screen intent does on a locked phone.
+    sh(`adb shell am start -n ${PKG}/.ui.MainActivity -a com.workdeck.app.INCOMING_CALL --es account a1 --es site teams`);
+    await sleep(3500);
+    const recent = sh('adb logcat -d -s WorkDeck/Main').split('\n').slice(-12).join('\n');
+    const overLock = /not looking at a1\|teams \(locked\)/.test(recent);
+    const pLock = await chat.eval(presence, 10000);
+    console.log('  ringing=' + ringing + ', over the lock screen=' + overLock + ': ' + JSON.stringify(pLock));
+    if (overLock) {
+      check(pLock && pLock.vis === 'hidden' && pLock.focus === false && pLock.seen === 0, 'shown over the lock screen for a ringing call: Teams is hidden, unfocused, nothing on screen (nothing gets "Seen")', pLock);
+    } else {
+      console.log('  NOTE: this emulator did not show its lock screen - over-lock-screen check skipped\n  ' + recent.replace(/\n/g, '\n  '));
+    }
+    shot('12-over-lock-screen');
+    await chat.eval(`window.__ciRing.close(), 'ok'`, 8000);
+    const released = await waitFor(() => /no longer shown over the lock screen/.test(sh('adb logcat -d -s WorkDeck/Main')), 8000);
+    check(released, 'when the ringing stops, WorkDeck is no longer shown over the lock screen');
+    sh('adb shell wm dismiss-keyguard');
+    sh('adb shell input keyevent 82');
+    await sleep(2000);
+    chat.close();
+    console.log('  presence log: ' + sh('adb logcat -d -s WorkDeck/Main').split('\n').filter((l) => /looking|lock screen/.test(l)).slice(-8).join('\n    '));
+  }
+
   console.log(failures ? `\n${failures} WebView check(s) FAILED` : '\nall WebView checks passed');
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.log('cdp-test crashed: ' + (e && e.stack || e)); process.exit(1); });

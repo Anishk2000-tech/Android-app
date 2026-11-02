@@ -540,9 +540,22 @@ public final class Notifier {
     }
 
     public void cancelCallAlert() {
-        if (mCallAlertKey != null) Log.i(TAG, "call alert cancelled");
+        boolean wasRinging = mCallAlertKey != null;
+        if (wasRinging) Log.i(TAG, "call alert cancelled");
         mNm.cancel(ID_CALL_ALERT);
         mCallAlertKey = null;
+        if (wasRinging) {
+            // WorkDeck may have been shown over the lock screen for this call: undo that.
+            final android.app.Activity a = com.workdeck.app.WorkDeckApp.mainActivity();
+            if (a instanceof MainActivity) {
+                a.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        ((MainActivity) a).onRingingStopped();
+                    }
+                });
+            }
+        }
     }
 
     // ------------------------------------------------------------------ files

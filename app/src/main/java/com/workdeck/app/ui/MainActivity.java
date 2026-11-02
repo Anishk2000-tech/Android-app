@@ -2,6 +2,7 @@ package com.workdeck.app.ui;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.KeyguardManager;
 import android.app.PictureInPictureParams;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -18,6 +19,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Rational;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -141,6 +144,15 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private int mNextPermissionCode = 200;
     private boolean mInPip;
     private boolean mShownForCall;
+    /** WorkDeck's window has input focus (no dialog/menu/notification shade over it). */
+    private boolean mWindowFocused;
+    /** When the user last touched WorkDeck (or pressed a key). */
+    private long mLastInteraction = SystemClock.elapsedRealtime();
+    /** Pages count as unattended after this long without a touch (screen left on). */
+    private static final long IDLE_MS = 5L * 60 * 1000;
+    /** Short menus/dialogs over a page don't count as looking away. */
+    private static final long FOCUS_LOSS_GRACE_MS = 2000;
+    private long mFocusLostAt;
     private String mAccountsSig;
     private int mNightMode;
 
@@ -211,6 +223,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (mWebId != null && mAccount.webTab(mWebId) == null) showTab(mAccount, mAccount.preferredSite());
         UiState.activityResumed = true;
         UiState.visibleTab = currentKey();
+        releaseLockScreenIfIdle();
+        updatePresence();
         if (mPrefs.keepAlive() || mCall.inCall()) {
             KeepAliveService.start(this);
         } else {
@@ -252,6 +266,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     protected void onPause() {
         UiState.activityResumed = false;
+        updatePresence();
         android.util.Log.i("WorkDeck/Main", "paused");
         if (mTabs != null) mTabs.flushCookies();
         super.onPause();
@@ -260,11 +275,14 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     protected void onStop() {
         UiState.activityVisible = false;
+        UiState.userPresent = false;
+        mMain.removeCallbacks(mPresenceCheck);
         if (mTabs != null) {
             BrowserTab cur = currentTab();
             if (cur != null) cur.setDrawn(false);
             mTabs.setUiVisible(false); // keeps every page awake while WorkDeck isn't on screen
         }
+        releaseLockScreenIfIdle();
         super.onStop();
     }
 
@@ -1019,11 +1037,104 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             if (t == cur) {
                 if (w.getParent() != mWebContainer) t.attach(mWebContainer);
                 if (w.getVisibility() != View.VISIBLE) w.setVisibility(View.VISIBLE);
-                t.setDrawn(UiState.activityVisible);
             } else {
                 t.park(mTabs.parkingLot(mWebContainer));
             }
         }
+        updatePresence();
+    }
+
+    // ------------------------------------------------------------------ is the user looking?
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        mWindowFocused = hasFocus;
+        if (!hasFocus) mFocusLostAt = SystemClock.elapsedRealtime();
+        updatePresence();
+    }
+
+    @Override
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        boolean wasIdle = SystemClock.elapsedRealtime() - mLastInteraction >= IDLE_MS;
+        mLastInteraction = SystemClock.elapsedRealtime();
+        if (wasIdle || !UiState.userPresent) updatePresence();
+    }
+
+    /**
+     * Why the user is not really looking at WorkDeck right now, or null if they are. Only
+     * while they are is the page on screen told
+     * it's visible and focused - web apps (Teams above all) mark messages as read / "Seen"
+     * whenever they believe that. Not while WorkDeck is only shown over the lock screen
+     * (a ringing call turns the screen on by itself), behind a dialog, with the screen off,
+     * or left untouched for a while; always during a call (the call screen stays live).
+     */
+    private String notLookingReason() {
+        if (!UiState.activityVisible) return "not on screen";
+        if (mCall != null && mCall.inCall()) return null;
+        if (!UiState.activityResumed) return "paused";
+        long now = SystemClock.elapsedRealtime();
+        if (!mWindowFocused && now - mFocusLostAt >= FOCUS_LOSS_GRACE_MS) return "covered";
+        try {
+            KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+            if (km != null && km.isKeyguardLocked()) return "locked";
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isInteractive()) return "screen off";
+        } catch (Throwable ignored) {
+        }
+        if (now - mLastInteraction >= IDLE_MS) return "idle";
+        return null;
+    }
+
+    private String mPresenceLogged;
+
+    /** Tells the page on screen whether the user is looking, and re-checks when that may change. */
+    private void updatePresence() {
+        if (mTabs == null) return;
+        String reason = notLookingReason();
+        boolean looking = reason == null;
+        String state = (looking ? "user is looking at " : "user is not looking at ") + currentKey()
+                + (looking ? "" : " (" + reason + ")");
+        if (!state.equals(mPresenceLogged)) {
+            mPresenceLogged = state;
+            android.util.Log.i("WorkDeck/Main", state);
+        }
+        UiState.userPresent = looking;
+        BrowserTab cur = currentTab();
+        if (cur != null) cur.setDrawn(looking);
+        mMain.removeCallbacks(mPresenceCheck);
+        if (!UiState.activityVisible) return;
+        long now = SystemClock.elapsedRealtime();
+        long next;
+        if (looking) {
+            next = IDLE_MS - (now - mLastInteraction);
+            if (!mWindowFocused) next = Math.min(next, FOCUS_LOSS_GRACE_MS - (now - mFocusLostAt));
+        } else {
+            next = 5000; // e.g. the lock screen going away
+        }
+        mMain.postDelayed(mPresenceCheck, Math.max(250, next + 100));
+    }
+
+    private final Runnable mPresenceCheck = new Runnable() {
+        @Override
+        public void run() {
+            updatePresence();
+        }
+    };
+
+    /** The ringing stopped (answered elsewhere, declined or missed). */
+    public void onRingingStopped() {
+        releaseLockScreenIfIdle();
+        updatePresence();
+    }
+
+    /** Shown over the lock screen only while a call rings or is in progress. */
+    private void releaseLockScreenIfIdle() {
+        if (!mShownForCall || mCall == null || mCall.inCall()) return;
+        if (Notifier.get(this).callAlertTab() != null) return;
+        android.util.Log.i("WorkDeck/Main", "no call any more: no longer shown over the lock screen");
+        showOverLockScreen(false);
     }
 
     private void refreshUi() {
@@ -1254,6 +1365,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             if (mShownForCall) showOverLockScreen(false);
         }
         updatePipParams(inCall);
+        updatePresence();
     }
 
     private int routeIcon(CallManager.Route r) {

@@ -53,18 +53,28 @@
   // ------------------------------------------------------------------ on screen or not
   // WorkDeck keeps pages that are not on screen fully awake (the engine would otherwise
   // slow them down until messages arrive late). The page itself is still told the truth:
-  // "hidden" whenever the user can't see it, so Teams/Outlook keep raising notifications.
+  // it is visible and focused only while the user is really looking at it in WorkDeck
+  // (phone unlocked, WorkDeck in front, touched recently). Web apps - Teams above all -
+  // mark messages as read ("Seen") whenever they believe the user is looking, so every
+  // signal they use for that follows this one answer: visibility, document.hasFocus(),
+  // window focus events and IntersectionObserver ("this message is on screen").
   // Nothing is drawn off screen, so animation frames never come; web apps also use them
   // to update the page (new messages, the incoming-call screen), so they are emulated
   // with timers while the page isn't drawn.
-  var drawnCache = true, drawnAt = 0, drawnPushed = false;
+  var drawnCache = false, drawnAt = 0, drawnPushed = false, drawnKnown = false;
+  var onDrawnChange = null;
   var isDrawn = function () {
     if (!drawnPushed) {
       var now = Date.now();
       if (now - drawnAt > 1000) {
-        var v = call('drawn');
-        drawnCache = v !== '0';
+        var was = drawnCache;
+        drawnCache = call('drawn') === '1'; // unknown = hidden
         drawnAt = now;
+        if (drawnKnown && was !== drawnCache && onDrawnChange) {
+          var v = drawnCache;
+          setTimeout(function () { onDrawnChange(v); }, 0);
+        }
+        drawnKnown = true;
       }
     }
     return drawnCache;
@@ -84,15 +94,106 @@
       getter(Document.prototype, 'hidden', function () { return isDrawn() ? hidDesc.get.call(this) : true; });
     }
   } catch (e) {}
+
+  // Focus: only while the user is looking. Window "focus" events that arrive while not
+  // looking are held back (this listener runs before the page's own) and replayed later.
+  var nativeHasFocus = Document.prototype.hasFocus;
+  var realFocus = function () {
+    try { return typeof nativeHasFocus === 'function' && !!nativeHasFocus.call(document); } catch (e) { return false; }
+  };
+  if (typeof nativeHasFocus === 'function') {
+    hidden(Document.prototype, 'hasFocus', function hasFocus() {
+      return isDrawn() && nativeHasFocus.call(this);
+    });
+  }
+  try {
+    window.addEventListener('focus', function (e) {
+      if (e.target === window && !isDrawn()) e.stopImmediatePropagation();
+    }, true);
+  } catch (e) {}
+
+  // IntersectionObserver: while the user isn't looking, changes ("this message scrolled
+  // into view") are held back; when they look again, the held targets are observed afresh,
+  // which reports their state at that moment.
+  var resyncObservers = function () {};
+  try {
+    if (typeof window.IntersectionObserver === 'function') {
+      var NativeIO = window.IntersectionObserver;
+      var ioProto = NativeIO.prototype;
+      var nObserve = ioProto.observe, nUnobserve = ioProto.unobserve, nDisconnect = ioProto.disconnect;
+      var heldTargets = new WeakMap();
+      var toResync = new Set();
+      var resyncPoll = 0;
+      var pollForResync = function () {
+        // Sub-frames learn about the user looking again by asking (the top frame is told).
+        if (resyncPoll || drawnPushed) return;
+        resyncPoll = setInterval(function () {
+          if (isDrawn()) resyncObservers();
+          if (!toResync.size) { clearInterval(resyncPoll); resyncPoll = 0; }
+        }, 1000);
+      };
+      var WDIO = function IntersectionObserver(callback, options) {
+        if (!(this instanceof WDIO)) return NativeIO.call(this, callback, options); // throws like the original
+        var io = new NativeIO(function (entries) {
+          if (!isDrawn()) {
+            var held = heldTargets.get(io);
+            if (!held) { held = new Set(); heldTargets.set(io, held); }
+            for (var i = 0; i < entries.length; i++) held.add(entries[i].target);
+            toResync.add(io);
+            pollForResync();
+            return;
+          }
+          return callback.call(io, entries, io);
+        }, options);
+        var proto = Object.getPrototypeOf(this);
+        if (proto !== ioProto) { try { Object.setPrototypeOf(io, proto); } catch (e) {} } // subclasses
+        return io;
+      };
+      WDIO.prototype = ioProto;
+      hidden(ioProto, 'unobserve', function unobserve(target) {
+        var held = heldTargets.get(this);
+        if (held) held.delete(target);
+        return nUnobserve.call(this, target);
+      });
+      hidden(ioProto, 'disconnect', function disconnect() {
+        heldTargets.delete(this);
+        toResync.delete(this);
+        return nDisconnect.call(this);
+      });
+      hidden(window, 'IntersectionObserver', WDIO);
+      resyncObservers = function () {
+        if (!toResync.size) return;
+        var list = [];
+        toResync.forEach(function (io) { list.push(io); });
+        toResync.clear();
+        list.forEach(function (io) {
+          var held = heldTargets.get(io);
+          heldTargets.delete(io);
+          if (held) held.forEach(function (t) {
+            try { nUnobserve.call(io, t); nObserve.call(io, t); } catch (e) {}
+          });
+        });
+      };
+    }
+  } catch (e) {}
+
+  onDrawnChange = function (on) {
+    try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
+    if (on) {
+      resyncObservers();
+      if (realFocus()) { try { window.dispatchEvent(new FocusEvent('focus')); } catch (e) {} }
+    } else {
+      armFrameFallbacks();
+      try { window.dispatchEvent(new FocusEvent('blur')); } catch (e) {}
+    }
+  };
   if (isTop) {
     hidden(window, '__wdDrawn', function (on) {
       var was = isDrawn();
       drawnCache = !!on;
       drawnPushed = true;
-      if (was !== drawnCache) {
-        try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
-      }
-      if (!drawnCache) armFrameFallbacks();
+      drawnKnown = true;
+      if (was !== drawnCache) onDrawnChange(drawnCache);
     });
   }
   if (typeof window.requestAnimationFrame === 'function') {

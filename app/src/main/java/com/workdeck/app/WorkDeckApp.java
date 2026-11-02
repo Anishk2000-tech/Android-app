@@ -27,6 +27,11 @@ public final class WorkDeckApp extends Application {
         sMainActivity = new WeakReference<>(a);
     }
 
+    /** The main screen, if it exists right now. */
+    public static Activity mainActivity() {
+        return sMainActivity.get();
+    }
+
     /** Fully exits: closes the UI, stops the service and ends the process (login is kept). */
     public static void quit(Context c) {
         final Context app = c.getApplicationContext();

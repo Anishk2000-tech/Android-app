@@ -89,7 +89,7 @@ adb shell dumpsys deviceidle whitelist +"$PKG"
 run_setup_flow debug
 
 step "WebView feature checks over DevTools protocol"
-timeout 660 node tests/android/cdp-test.js "$OUT" || fail=1
+timeout 780 node tests/android/cdp-test.js "$OUT" || fail=1
 
 step "Background survival: home screen for 60s"
 adb shell input keyevent KEYCODE_HOME
