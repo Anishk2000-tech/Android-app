@@ -202,7 +202,7 @@ public final class BrowserTab {
         mToken = newToken();
         mDesktop = web != null ? web.desktop : account.isDesktop(site);
 
-        applySettings(wv, mDesktop, textZoom(), site);
+        applySettings(wv, desktopIdentity(), textZoom());
         CookieManager cm = cookies();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(wv, true);
@@ -227,7 +227,7 @@ public final class BrowserTab {
 
     /** Shared settings for tab WebViews and their popups. */
     @SuppressLint("SetJavaScriptEnabled")
-    public static void applySettings(WebView wv, boolean desktop, int textZoom, Site site) {
+    public static void applySettings(WebView wv, boolean desktopIdentity, int textZoom) {
         WebSettings s = wv.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -246,11 +246,64 @@ public final class BrowserTab {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setTextZoom(textZoom);
         if (Build.VERSION.SDK_INT >= 26) s.setSafeBrowsingEnabled(true);
-        // Teams always needs the desktop identity (it refuses mobile browsers);
-        // Outlook's mobile view uses the real mobile site.
-        boolean desktopIdentity = desktop || site == Site.TEAMS;
+        // Computer (Windows) or phone identity: see desktopIdentity().
         s.setUserAgentString(desktopIdentity ? UserAgents.desktop() : UserAgents.mobile());
         WebViewSupport.setUserAgentMetadata(s, UserAgents.metadata(desktopIdentity));
+    }
+
+    /**
+     * Present a computer (Windows) browser to sites? In desktop view always; Teams always
+     * (it refuses phone browsers); and wherever the company's sign-in policy blocks phone
+     * browsers (then mobile view only changes the layout).
+     */
+    boolean desktopIdentity() {
+        if (mDesktop || site == Site.TEAMS) return true;
+        return web != null ? web.computerIdentity : account.computerIdentity(site);
+    }
+
+    /** Mobile view is shown with a computer identity because the company blocks phones. */
+    public boolean computerIdentityForced() {
+        return web != null ? web.computerIdentity : account.computerIdentity(site);
+    }
+
+    private long mBlockedDialogAt;
+
+    /**
+     * The company's sign-in policy (Conditional Access) refused this browser, e.g. "You
+     * can't get there from here - you must use Microsoft Edge". Many companies only block
+     * phone browsers: then present a computer browser from now on (keeping the phone
+     * layout) and load the page again. If a computer browser is refused too, explain.
+     */
+    void onAccessBlocked(String reason) {
+        if (mWebView == null) return;
+        if (!desktopIdentity()) {
+            Log.w(TAG, key + ": company policy blocks the phone identity (" + reason + "); switching to computer identity");
+            if (web != null) web.computerIdentity = true;
+            else account.setComputerIdentity(site, true);
+            Accounts.get(mApp).save();
+            applySettings(mWebView, true, textZoom());
+            registerScript();
+            loadHome();
+            if (mHost != null) mHost.onAccessBlocked(this, true);
+            return;
+        }
+        Log.w(TAG, key + ": company policy blocks this browser (" + reason + ")");
+        long now = SystemClock.elapsedRealtime();
+        if (now - mBlockedDialogAt < 60000) return;
+        mBlockedDialogAt = now;
+        if (mHost != null) mHost.onAccessBlocked(this, false);
+    }
+
+    /** Opens a link in the Microsoft Edge app (company-managed browser), or its Play Store page. */
+    public void openInEdge(String url) {
+        Context c = (mHost != null && mHost.activity() != null) ? mHost.activity() : mApp;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage("com.microsoft.emmx");
+            if (!(c instanceof Activity)) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            c.startActivity(i);
+        } catch (ActivityNotFoundException e) {
+            openExternal("https://play.google.com/store/apps/details?id=com.microsoft.emmx");
+        }
     }
 
     private void registerScript() {
@@ -267,7 +320,7 @@ public final class BrowserTab {
         if (sScriptTemplate == null) sScriptTemplate = Assets.readText(mApp, "workdeck/inject.js");
         JSONObject cfg = new JSONObject();
         try {
-            boolean desktopIdentity = mDesktop || site == Site.TEAMS;
+            boolean desktopIdentity = desktopIdentity();
             cfg.put("token", mToken);
             cfg.put("site", site == null ? "web" : site.key);
             cfg.put("desktop", desktopIdentity);
@@ -520,7 +573,7 @@ public final class BrowserTab {
         if (mWebView == null) return;
         mDesktop = desktop;
         Log.i(TAG, key + ": view mode -> " + (desktop ? "desktop" : "mobile"));
-        applySettings(mWebView, mDesktop, textZoom(), site);
+        applySettings(mWebView, desktopIdentity(), textZoom());
         registerScript();
         // A fresh navigation (not reload) guarantees the new identity is used everywhere.
         String url = mWebView.getUrl();
@@ -771,6 +824,12 @@ public final class BrowserTab {
             }
             return true;
         }
+        if (url.startsWith("microsoft-edge:")) {
+            // "Launch in Edge" on a company-policy page.
+            String target = url.substring("microsoft-edge:".length());
+            if (userGesture) openInEdge(UrlRouter.isHttp(target) ? target : currentUrl() != null ? currentUrl() : target);
+            return true;
+        }
         if (url.startsWith("ms-") || url.startsWith("tel:") || url.startsWith("sms:") || url.startsWith("geo:")
                 || url.startsWith("market:")) {
             if (userGesture) openExternal(url);
@@ -792,7 +851,7 @@ public final class BrowserTab {
         WebView w = new WebView(activity);
         // Popups must live in the same profile (same sign-in) as the page that opened them.
         WebViewSupport.setProfile(w, account.profile);
-        applySettings(w, mDesktop, textZoom(), site);
+        applySettings(w, desktopIdentity(), textZoom());
         cookies().setAcceptThirdPartyCookies(w, true);
         w.addJavascriptInterface(new JsBridge(this, mApp, mToken), BRIDGE_NAME);
         WebViewSupport.addDocumentStartScript(w, buildScript(), UrlRouter.injectionOriginRules());
@@ -903,7 +962,7 @@ public final class BrowserTab {
         public void onPageFinished(WebView view, String url) {
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
             cookies().flush();
-            if (web != null && UrlRouter.isHttp(url) && !url.equals(web.url)) {
+            if (web != null && UrlRouter.isHttp(url) && !UrlRouter.isLogin(url) && !url.equals(web.url)) {
                 web.url = url; // reopen where the user left off
                 Accounts.get(mApp).save();
             }

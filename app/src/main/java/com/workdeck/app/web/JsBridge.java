@@ -163,6 +163,7 @@ final class JsBridge {
                 else if ("ringing_ui".equals(type)) Notifier.get(mApp).onCallScreen(mTab, true, detail);
                 else if ("ringing_end".equals(type)) Notifier.get(mApp).onCallScreen(mTab, false, detail);
                 else if ("unsupported_browser".equals(type)) mTab.onBrowserUnsupported();
+                else if ("access_blocked".equals(type)) mTab.onAccessBlocked(detail);
             }
         });
     }

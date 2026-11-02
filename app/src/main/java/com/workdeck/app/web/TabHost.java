@@ -42,6 +42,12 @@ public interface TabHost {
     /** The page took (or could not take) files handed to it with {@link BrowserTab#attach}. */
     void onAttachResult(BrowserTab tab, String method, int count, boolean seen);
 
+    /**
+     * The company's sign-in policy blocked the tab. {@code switched}: WorkDeck now presents
+     * a computer browser there and reloaded it; otherwise the policy needs the managed Edge app.
+     */
+    void onAccessBlocked(BrowserTab tab, boolean switched);
+
     /** A site reported that the WebView engine is too old. */
     void onBrowserOutdated(String chromeMajor);
 }

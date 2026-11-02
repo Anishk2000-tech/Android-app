@@ -319,6 +319,32 @@ async function connectAll() {
     check(false, 'Outlook page reachable over DevTools');
   }
   shot('06-outlook-mobile');
+  // 6b. A company that only blocks phone browsers ("You must use Microsoft Edge"): WorkDeck
+  // switches that tab to a computer identity (keeping the phone layout) and reloads it.
+  const olm = await pageFor(isOutlook);
+  if (olm) {
+    const BLOCKED = 'https://login.microsoftonline.com/wd-ci-blocked';
+    const blockedHtml = `<!doctype html><html><head><title>Sign in to your account</title>
+      <script>window.$Config = { iErrorCode: 53005 };</script></head><body><h1>You can't get there from here</h1>
+      <p>You must use Microsoft Edge to access this resource.</p></body></html>`;
+    await olm.send('Fetch.enable', { patterns: [{ urlPattern: BLOCKED + '*', requestStage: 'Request' }] });
+    olm.on('Fetch.requestPaused', (p) => olm.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }], body: Buffer.from(blockedHtml).toString('base64') }));
+    await olm.send('Page.navigate', { url: BLOCKED });
+    const switched = await waitFor(() => /blocks the phone identity/.test(sh('adb logcat -d -s WorkDeck/Tab')), 15000);
+    await olm.send('Fetch.disable').catch(() => {});
+    olm.close();
+    let ua = '';
+    for (let i = 0; i < 8 && !/Windows NT/.test(ua); i++) {
+      await sleep(2500);
+      const again = await pageFor(isOutlook);
+      if (again) { ua = String(await again.eval('navigator.userAgent', 8000)); again.close(); }
+    }
+    check(switched && /Windows NT/.test(ua), 'a company policy that blocks phone browsers makes Outlook switch to a computer identity (phone layout kept)', ua.slice(0, 60));
+    shot('06b-blocked-switched');
+  } else {
+    check(false, 'Outlook page reachable for the company-policy test');
+  }
   ui('tap "Switch desktop / mobile view"');
   await sleep(3000);
   await openApp('CRAFTWW', 'Teams');

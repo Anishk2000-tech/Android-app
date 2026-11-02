@@ -18,6 +18,9 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## What's new in 1.4.1
+* **"You can't get there from here – You must use Microsoft Edge"** (a company's sign-in policy, e.g. OMC's *One Workplace* page) is now handled. Many companies block **phone** browsers but allow computer browsers. In **mobile view** WorkDeck presents itself as a phone browser, so such a company blocks it — in desktop view (the default) it presents a computer browser and is let in. WorkDeck now recognises the policy page, switches that account's app to a **computer identity while keeping the phone layout**, reloads it and tells you. If a company refuses computer browsers too (only its company-managed Edge app is allowed), WorkDeck explains that and offers **Open in Edge**; the page's own *Launch in Edge* button works too.
+
 ## What's new in 1.4.0
 * **Instant notifications, also after hours in the background.** Android's browser engine slows down web pages it thinks nobody sees — a page that isn't on screen gets its timers run at most once a second, after a few minutes only once a minute. That's what delayed Teams' and Outlook's live connection, so messages, mail and calls came late or only when you opened the app. WorkDeck now keeps every account's Teams and Outlook **fully awake** when they're not on screen — while you use another tab, when WorkDeck is behind other apps, and after you swipe it away from Recents. The engine only does that for pages attached to a window, so off-screen pages live in WorkDeck's own **invisible background window** (a private virtual display — no extra permission, nothing is shown or drawn). The pages are still told they're "hidden", so Teams and Outlook keep sending their notifications, and screen updates they'd normally wait for (new messages, the incoming-call screen) still happen.
 * **No message lost while a page reloads.** When Teams/Outlook reload (network change, crash recovery, the 12-hour refresh), messages that arrive meanwhile are announced afterwards instead of being counted as already seen.
@@ -52,7 +55,7 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 ## 1. Install (step by step)
 
 1. **Download the APK** on your phone:
-   open **[release/WorkDeck-1.4.0.apk](release/WorkDeck-1.4.0.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
+   open **[release/WorkDeck-1.4.1.apk](release/WorkDeck-1.4.1.apk)** on GitHub and tap **Download** (or use the APK file you were sent).
 2. Open the downloaded file (tap the download notification, or open *Files → Downloads*).
 3. If Android says *"For your security, your phone is not allowed to install unknown apps from this source"*: tap **Settings → turn on "Allow from this source"**, then go back.
 4. Tap **Install**. If **Play Protect** warns about an unknown app, tap **More details → Install anyway** (it warns about every app not from the Play Store).
@@ -144,6 +147,7 @@ The bottom bar:
 | No sound / wrong speaker | Tap the speaker button in the bottom bar during the call. |
 | "Your browser version isn't supported" / blank page | WorkDeck shows a prompt with **Update WebView / Update Chrome** buttons when Microsoft reports this. Update **Android System WebView** and **Google Chrome** in the Play Store, then ⋮ → Reload. (Teams only supports the latest few Chrome versions.) |
 | Sign-in loops / wrong account | Account settings → **Sign out of this account** (or ⋮ → Settings → *Sign out of all accounts*), then sign in again. |
+| "You can't get there from here – You must use Microsoft Edge" | Your company blocks **phone** browsers. Tap the 🖥/📱 button to use desktop view (or just wait: WorkDeck switches that app to a computer identity by itself and keeps the phone layout). If it still shows up in desktop view, the company only allows its managed Edge app — use *Open in Edge* or ask IT. |
 | Company says device not allowed | Your organisation's policy (e.g. Intune / Conditional Access) may only allow approved apps. WorkDeck can't bypass that. |
 | Text too small in desktop view | Zoom button → choose a smaller **Width** (e.g. 800px) or use **A+**. Or switch to mobile view. |
 

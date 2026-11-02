@@ -43,6 +43,8 @@ public final class Account {
         public String title;
         public boolean desktop;
         public int textZoom = 100;
+        /** The company blocks phone browsers here: always present a computer browser. */
+        public boolean computerIdentity;
 
         WebTab(String id, String url, String title, boolean desktop) {
             this.id = id;
@@ -60,6 +62,8 @@ public final class Account {
         String customUrl = "";
         /** Opened at least once: start it in the background from then on. */
         boolean opened;
+        /** The company blocks phone browsers here: mobile view keeps a computer identity. */
+        boolean computerIdentity;
     }
 
     Account(String id, String profile, String name, int color) {
@@ -140,6 +144,9 @@ public final class Account {
     public void setCustomUrl(Site s, String v) { site(s).customUrl = v == null ? "" : v.trim(); }
 
     public boolean wasOpened(Site s) { return site(s).opened; }
+
+    public boolean computerIdentity(Site s) { return s != null && site(s).computerIdentity; }
+    public void setComputerIdentity(Site s, boolean v) { site(s).computerIdentity = v; }
     public void markOpened(Site s) { site(s).opened = true; }
 
     public boolean isPersonal() { return Prefs.ACCOUNT_PERSONAL.equals(type); }
@@ -167,13 +174,13 @@ public final class Account {
             SiteSettings ss = site(s);
             sites.put(s.key, new JSONObject().put("enabled", ss.enabled).put("view", ss.view)
                     .put("textZoom", ss.textZoom).put("notify", ss.notify).put("customUrl", ss.customUrl)
-                    .put("opened", ss.opened));
+                    .put("opened", ss.opened).put("computerIdentity", ss.computerIdentity));
         }
         o.put("sites", sites);
         JSONArray web = new JSONArray();
         for (WebTab w : mWebTabs) {
             web.put(new JSONObject().put("id", w.id).put("url", w.url).put("title", w.title)
-                    .put("desktop", w.desktop).put("textZoom", w.textZoom));
+                    .put("desktop", w.desktop).put("textZoom", w.textZoom).put("computerIdentity", w.computerIdentity));
         }
         o.put("webTabs", web).put("nextWebId", mNextWebId);
         return o;
@@ -197,6 +204,7 @@ public final class Account {
             ss.notify = so.optBoolean("notify", true);
             ss.customUrl = so.optString("customUrl", "");
             ss.opened = so.optBoolean("opened", false);
+            ss.computerIdentity = so.optBoolean("computerIdentity", false);
         }
         JSONArray web = o.optJSONArray("webTabs");
         for (int i = 0; web != null && i < web.length(); i++) {
@@ -205,6 +213,7 @@ public final class Account {
             WebTab w = new WebTab(wo.optString("id", String.valueOf(i + 1)), wo.optString("url"),
                     wo.optString("title"), wo.optBoolean("desktop", false));
             w.textZoom = wo.optInt("textZoom", 100);
+            w.computerIdentity = wo.optBoolean("computerIdentity", false);
             a.mWebTabs.add(w);
         }
         a.mNextWebId = Math.max(o.optInt("nextWebId", 1), a.mWebTabs.size() + 1);

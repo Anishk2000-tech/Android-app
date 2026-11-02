@@ -309,4 +309,12 @@
     <string name="set_reliability_bad">%1$s Tap to fix.</string>
     <string name="restart_title">WorkDeck was stopped by the phone</string>
     <string name="restart_text">Tap to reconnect Teams and Outlook. To stop this happening: Settings → Apps → WorkDeck → Battery → Unrestricted (and on Samsung/Xiaomi/Oppo/Vivo phones, allow it to run in the background).</string>
+
+    <!-- Company sign-in policy (1.4.1) -->
+    <string name="blocked_switched">%1$s\'s company doesn\'t allow phone browsers, so %2$s now opens as a computer browser (the phone layout is kept).</string>
+    <string name="blocked_title">Blocked by %1$s\'s company policy</string>
+    <string name="blocked_text">%1$s\'s IT only allows its company-managed Microsoft Edge for %2$s, even from a computer browser. WorkDeck can\'t get around that. You can open it in the Edge app, or ask your IT team to allow browser access.</string>
+    <string name="blocked_open_edge">Open in Edge</string>
+    <string name="close">Close</string>
+    <string name="view_mobile_computer_note">Phone layout – kept as a computer browser, because %1$s\'s company blocks phone browsers</string>
 </resources>

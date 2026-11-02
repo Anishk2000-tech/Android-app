@@ -816,6 +816,23 @@ test('a page that is not on screen reports itself hidden and still gets (emulate
   await ctx.close();
 });
 
+test('company sign-in policy pages ("You must use Microsoft Edge") are recognised; ordinary pages are not', async (b, base) => {
+  PAGES['/ca-blocked.html'] = `<!doctype html><html><head><title>Sign in to your account</title>
+    <script>window.$Config = { iErrorCode: 53005, strServiceExceptionMessage: 'AADSTS53005: Application needs to enforce Intune protection policies.' };</script>
+    </head><body><div>ONE WORKPLACE</div><div>user@omc.com</div><h1>You can't get there from here</h1>
+    <p>You must use Microsoft Edge to access this resource.</p><a href="microsoft-edge:https://outlook.office.com/mail/">Launch in Edge</a></body></html>`;
+  PAGES['/chat-mentions.html'] = `<!doctype html><html><body><p>Bob: you can't get there from here, take the bus</p></body></html>`;
+  const signals = async (file) => {
+    const { ctx, page } = await newPage(b, base, { site: 'outlook', desktop: false, desktopLayout: false }, file);
+    await page.waitForTimeout(1500);
+    const r = await page.evaluate(() => window.__calls.filter((c) => c.name === 'callSignal').map((c) => c.args[1] + ':' + c.args[2]));
+    await ctx.close();
+    return r;
+  };
+  assert.deepStrictEqual(await signals('/ca-blocked.html'), ['access_blocked:edge-required']);
+  assert.deepStrictEqual(await signals('/chat-mentions.html'), [], 'a chat message with the same words is not a sign-in block');
+});
+
 (async () => {
   const srv = await startServer();
   const base = 'http://127.0.0.1:' + srv.address().port;

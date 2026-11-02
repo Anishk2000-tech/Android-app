@@ -1070,9 +1070,13 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (t == null) return;
         boolean desktop = !t.isDesktop();
         t.setDesktop(desktop);
-        int msg = desktop ? R.string.view_desktop_now
-                : (t.site == Site.TEAMS ? R.string.view_teams_mobile_note : R.string.view_mobile_now);
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        if (!desktop && t.site != Site.TEAMS && t.computerIdentityForced()) {
+            Toast.makeText(this, getString(R.string.view_mobile_computer_note, t.account.name), Toast.LENGTH_LONG).show();
+        } else {
+            int msg = desktop ? R.string.view_desktop_now
+                    : (t.site == Site.TEAMS ? R.string.view_teams_mobile_note : R.string.view_mobile_now);
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        }
         refreshUi();
     }
 
@@ -1597,6 +1601,28 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     public void switchToSite(BrowserTab from, Site site, String url) {
         openIn(from.account, site, url);
+    }
+
+    @Override
+    public void onAccessBlocked(final BrowserTab tab, boolean switched) {
+        String app = tab.displayTitle();
+        if (switched) {
+            Toast.makeText(this, getString(R.string.blocked_switched, tab.account.name, app), Toast.LENGTH_LONG).show();
+            refreshUi();
+            return;
+        }
+        if (isFinishing() || !UiState.activityVisible) return;
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.blocked_title, tab.account.name))
+                .setMessage(getString(R.string.blocked_text, tab.account.name, app))
+                .setPositiveButton(R.string.blocked_open_edge, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        tab.openInEdge(tab.web != null ? tab.web.url : tab.account.homeUrl(tab.site));
+                    }
+                })
+                .setNegativeButton(R.string.close, null)
+                .show();
     }
 
     private static boolean sOutdatedShown;

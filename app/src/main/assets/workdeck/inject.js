@@ -1103,6 +1103,31 @@
     });
   }
 
+  // A company sign-in policy (Conditional Access) refused this browser, e.g. "You can't get
+  // there from here - You must use Microsoft Edge to access this resource". Many companies
+  // only refuse phone browsers; native then switches this tab to a computer identity.
+  if (isTop) {
+    var blockedSent = false;
+    var checkBlocked = function () {
+      if (blockedSent) return;
+      try {
+        var conf = window.$Config || {};
+        var code = String(conf.iErrorCode || conf.strServiceExceptionMessage || '');
+        var onLogin = /(^|\.)login\./i.test(location.hostname) || !!window.$Config;
+        if (!onLogin) return;
+        var t = (document.body && document.body.innerText || '').slice(0, 4000);
+        var edge = /must use (the )?Microsoft Edge|Microsoft Edge (to access|is required)|Launch in Edge/i.test(t);
+        var blocked = edge || /can.t get there from here|AADSTS53\d{3}/i.test(t) || /^53\d{3}\b|AADSTS53\d{3}/.test(code);
+        if (blocked) {
+          blockedSent = true;
+          call('callSignal', 'access_blocked', edge ? 'edge-required' : 'policy');
+        }
+      } catch (e) {}
+    };
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(checkBlocked, 300); });
+    window.addEventListener('load', function () { setTimeout(checkBlocked, 800); setTimeout(checkBlocked, 3000); });
+  }
+
   // Microsoft says the browser is too old -> ask native to suggest a WebView update.
   if (isTop) {
     var checkUnsupported = function () {
