@@ -20,7 +20,9 @@ function evalIn(page) {
   });
 }
 (async () => {
-  const m = sh('adb shell cat /proc/net/unix').match(/@(webview_devtools_remote_\d+)/);
+  // WorkDeck's own DevTools socket (other apps on the emulator can have WebViews too).
+  const pid = sh('adb shell pidof com.workdeck.app').trim().split(/\s+/)[0];
+  const m = pid ? sh('adb shell cat /proc/net/unix').match(new RegExp('@(webview_devtools_remote_' + pid + ')\\b')) : null;
   if (!m) { console.log('null'); return; }
   sh(`adb forward tcp:9222 localabstract:${m[1]}`);
   setTimeout(() => { console.log('null'); process.exit(0); }, 60000);

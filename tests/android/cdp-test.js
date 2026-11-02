@@ -70,8 +70,10 @@ async function connect(wsUrl) {
 
 let devPort = 9300;
 async function pages() {
+  // WorkDeck's own DevTools socket (other apps on the emulator can have WebViews too).
   const unix = sh('adb shell cat /proc/net/unix');
-  const m = unix.match(/@(webview_devtools_remote_\d+)/);
+  const pid = sh(`adb shell pidof ${PKG}`).trim().split(/\s+/)[0];
+  const m = (pid && unix.match(new RegExp('@(webview_devtools_remote_' + pid + ')\\b'))) || null;
   if (!m) return [];
   for (let i = 0; i < 5; i++) {
     // A fresh forwarded port each try: a stuck adb forward must not hang the whole test.
