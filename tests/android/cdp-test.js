@@ -81,7 +81,8 @@ async function pages() {
       const list = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(8000) })).json();
       return list.filter((p) => p.type === 'page');
     } catch (e) {
-      console.log('  DevTools list failed on port ' + port + ': ' + String(e && e.message || e).slice(0, 80));
+      console.log('  DevTools list failed on port ' + port + ': ' + String(e && e.message || e).slice(0, 80)
+        + ' (socket ' + m[1] + ', WorkDeck pid now ' + sh(`adb shell pidof ${PKG}`).trim() + ')');
       sh(`adb forward --remove tcp:${port}`);
       await sleep(1500);
     }
@@ -430,9 +431,15 @@ async function connectAll() {
     check(orec.includes('OMC \u00b7 Teams'), 'notification is labelled with its account ("OMC \u00b7 Teams")', (orec.match(/android\.subText=[^\n]*/) || [''])[0]);
     if (!omcShown) diag('OMC notification');
   } else if (fresh.length) {
-    const txt = await fresh[0].c.eval('document.body ? document.body.innerText : ""', 8000);
+    // The OMC page is the local "update WebView" notice (not a Microsoft page).
+    let txt = '';
+    for (const x of fresh) {
+      const t = String(await x.c.eval('document.body ? document.body.innerText : ""', 8000));
+      if (/update Android System WebView/i.test(t) || !txt) txt = t;
+      if (/update Android System WebView/i.test(t)) break;
+    }
     console.log('  NOTE: this emulator WebView cannot keep accounts apart (phones get it via a WebView update)');
-    check(/update Android System WebView/i.test(String(txt)), 'without profile support, OMC asks for a WebView update instead of mixing sign-ins', String(txt).slice(0, 120));
+    check(/update Android System WebView/i.test(txt), 'without profile support, OMC asks for a WebView update instead of mixing sign-ins', txt.slice(0, 120));
   }
   for (const x of all) x.c.close();
   sh(`adb shell am start -n ${PKG}/.ui.MainActivity`);

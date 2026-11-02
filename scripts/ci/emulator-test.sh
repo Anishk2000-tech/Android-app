@@ -81,7 +81,7 @@ for i in $(seq 1 40); do
 done
 adb logcat -c
 # Keep a running copy of logcat on the host so it survives an emulator crash.
-(adb logcat -v time > "$OUT/logcat-stream.txt" 2>&1 &)
+(adb logcat -b main,system,crash,events -v time > "$OUT/logcat-stream.txt" 2>&1 &)
 
 step "Install debug build (all runtime permissions granted with -g)"
 adb install -r -g "$DEBUG_APK"
@@ -127,6 +127,11 @@ echo "marker after reopen: $MARK"
 check "Teams page was kept alive in memory (not reloaded)" "[ \"$MARK\" = 4242 ]"
 
 step "Crash check (logcat)"
+echo "--- WorkDeck process deaths / native crashes (from the streamed logcat):"
+grep -aE "Process $PKG \(pid [0-9]+\) has died|Fatal signal|>>> $PKG|Abort message|backtrace:|  #[0-9]+ pc |lowmemorykiller|lmkd|am_kill.*$PKG|am_proc_died.*$PKG|Killing [0-9]+:$PKG|ANR in $PKG|Scheduling restart of crashed service $PKG" "$OUT/logcat-stream.txt" \
+  | grep -av "com\.google" | head -80 | tee "$OUT/deaths.txt"
+cat "$OUT/deaths.txt" >> "$OUT/summary.txt"
+check "WorkDeck's process never died during the test" "! grep -aqE 'Process $PKG \\(pid [0-9]+\\) has died|>>> $PKG' $OUT/logcat-stream.txt"
 timeout 60 adb logcat -d > "$OUT/logcat-debug.txt"
 grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-debug.txt" | tail -60
 # Only WorkDeck's own process counts (other emulator apps crash now and then).
