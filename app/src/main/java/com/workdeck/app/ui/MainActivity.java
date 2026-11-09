@@ -573,6 +573,17 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 refreshUi();
             }
         });
+        View reload = findViewById(R.id.zoom_reload);
+        reload.setVisibility(View.VISIBLE);
+        reload.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                BrowserTab t = currentTab();
+                if (t != null) t.reload();
+                mZoomBar.setVisibility(View.GONE);
+                refreshUi();
+            }
+        });
         mSoloRoute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {

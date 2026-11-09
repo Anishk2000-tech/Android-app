@@ -323,6 +323,17 @@
                 android:textAllCaps="false"
                 android:textColor="@color/wd_text"
                 android:textSize="12sp" />
+
+            <!-- Single-app editions (no menu): reload the page. -->
+            <ImageButton
+                android:id="@+id/zoom_reload"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/menu_reload"
+                android:src="@drawable/ic_refresh"
+                android:tint="@color/wd_icon"
+                android:visibility="gone" />
         </LinearLayout>
 
         <LinearLayout

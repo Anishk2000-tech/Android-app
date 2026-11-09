@@ -767,6 +767,56 @@ public final class BrowserTab {
      * Shared navigation policy for tabs and popups. Returns true if the navigation
      * was handled (blocked, routed to the other tab, or opened externally).
      */
+    private int mHealAttempts;
+    private long mHealWindowStart;
+
+    /**
+     * The site's own page failed with a generic error (net::ERR_FAILED) - typically the
+     * site's service worker failing to serve its page (seen with Teams right after a fresh
+     * sign-in). Recover on our own: reload once; if it fails again, remove the site's
+     * service worker and cached files (the sign-in cookies stay) and load it again. Only
+     * then is the error shown (with Retry). Returns true while recovering.
+     */
+    private boolean selfHeal(WebView view, String url, String desc) {
+        if (view != mWebView || web != null || UrlRouter.siteFor(url) != site) return false;
+        long now = SystemClock.elapsedRealtime();
+        if (now - mHealWindowStart > 120000) {
+            mHealWindowStart = now;
+            mHealAttempts = 0;
+        }
+        mHealAttempts++;
+        Log.w(TAG, key + ": " + desc + " loading " + url + " (attempt " + mHealAttempts + ")");
+        final String target = url;
+        if (mHealAttempts == 1) {
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (mWebView != null) mWebView.reload();
+                }
+            }, 1500);
+            return true;
+        }
+        if (mHealAttempts == 2) {
+            try {
+                android.net.Uri u = android.net.Uri.parse(url);
+                String origin = u.getScheme() + "://" + u.getHost();
+                android.webkit.WebStorage ws = WebViewSupport.webStorage(account.profile);
+                if (ws != null) ws.deleteOrigin(origin);
+                Log.w(TAG, key + ": removed " + origin + "'s service worker and stored files; loading again");
+            } catch (Throwable t) {
+                Log.w(TAG, "could not clear the site's storage", t);
+            }
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (mWebView != null) mWebView.loadUrl(target);
+                }
+            }, 1500);
+            return true;
+        }
+        return false;
+    }
+
     /**
      * Can a link for the account's other site be handed over? WorkDeck: when the account
      * has that site. Single-app builds: always (the account's other app opens it, or -
@@ -986,8 +1036,14 @@ public final class BrowserTab {
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             if (!request.isForMainFrame()) return;
             int code = error.getErrorCode();
-            if (code == ERROR_UNKNOWN || code == ERROR_UNSUPPORTED_SCHEME) return;
-            mError = String.valueOf(error.getDescription());
+            if (code == ERROR_UNSUPPORTED_SCHEME) return;
+            String desc = String.valueOf(error.getDescription());
+            if (code == ERROR_UNKNOWN) {
+                // Cancelled navigations (downloads, app links, a newer navigation) are not errors.
+                if (desc.contains("ERR_ABORTED") || !desc.contains("ERR_")) return;
+                if (selfHeal(view, request.getUrl().toString(), desc)) return;
+            }
+            mError = desc;
             changed();
         }
 

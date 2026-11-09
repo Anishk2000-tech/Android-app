@@ -63,9 +63,16 @@ async function connect(wsUrl) {
   });
   let id = 0;
   const pending = new Map();
-  ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+  const handlers = {};
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+    else if (m.method && handlers[m.method]) handlers[m.method](m.params || {});
+  };
   const send = (method, params) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params: params || {} })); });
   return {
+    send,
+    on(method, fn) { handlers[method] = fn; },
     async eval(expr, timeoutMs, gesture) {
       const r = await Promise.race([
         send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: !!gesture }),
@@ -240,6 +247,36 @@ async function links(key, p) {
   check(`${app.name}: back closes the link and returns to ${app.teams ? 'Teams' : 'Outlook'}`, !/Close this tab/.test(t));
 }
 
+// Teams' page failing with net::ERR_FAILED (seen right after a fresh sign-in): the app
+// reloads, then clears the site's service worker / stored files and loads again, and only
+// then shows its own error screen with Retry - which works once the page loads again.
+async function selfHeal(p) {
+  sh('adb logcat -c');
+  let failing = true;
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: 'https://teams.microsoft.com/*', requestStage: 'Request' }] });
+  p.on('Fetch.requestPaused', (e) => {
+    if (failing && e.resourceType === 'Document') p.send('Fetch.failRequest', { requestId: e.requestId, errorReason: 'Failed' });
+    else p.send('Fetch.continueRequest', { requestId: e.requestId });
+  });
+  await p.send('Page.navigate', { url: 'https://teams.microsoft.com/v2/' });
+  const healed = await waitFor(() => /removed https:\/\/teams\.microsoft\.com's service worker/.test(sh('adb logcat -d -s WorkDeck/Tab')), 20000);
+  const log = sh('adb logcat -d -s WorkDeck/Tab');
+  check('Teams page fails (net::ERR_FAILED): the app reloads, then clears Teams\' service worker and stored files by itself',
+    /ERR_FAILED loading https:\/\/teams\.microsoft\.com\/v2\/ \(attempt 1\)/.test(log) && healed,
+    log.split('\n').filter((l) => /attempt|removed/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Tab: /, '')).join(' | '));
+  await sleep(6000);
+  let t = texts('omcTeams-error');
+  shot('omcTeams-error');
+  check('still failing after that: the app\'s own error screen with Retry (not a dead end)', /Can.t load this page/.test(t) && /ERR_FAILED/.test(t) && /\nRetry\n/.test('\n' + t + '\n'),
+    t.split('\n').slice(0, 5).join(' | '));
+  failing = false;
+  ui('tap "=Retry"');
+  await sleep(8000);
+  t = texts('omcTeams-retried');
+  check('Retry loads Teams again once it works', !/Can.t load this page/.test(t), t.split('\n').slice(0, 3).join(' | '));
+  await p.send('Fetch.disable');
+}
+
 async function siblingLink(p) {
   // An Outlook link in OMC Teams opens in the OMC Outlook app (same account).
   await p.eval(`(() => { const a = document.createElement('a'); a.href = 'https://outlook.office.com/mail/'; a.target = '_blank';
@@ -260,6 +297,7 @@ async function siblingLink(p) {
   if (p) {
     await calls('omcTeams', p);
     await links('omcTeams', p);
+    await selfHeal(p);
     await siblingLink(p);
     p.close();
   }
