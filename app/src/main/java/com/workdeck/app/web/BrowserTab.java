@@ -805,8 +805,10 @@ public final class BrowserTab {
 
     private void checkErrorPage(final WebView view, final String url) {
         if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return; // already handled
-        // Another site's real page (the sign-in page, a link) is not an error page.
+        // No page yet, or another site's real page (the sign-in page, a link): not an error page.
+        if (url == null || url.startsWith("about:")) return;
         if (UrlRouter.isHttp(url) && UrlRouter.siteFor(url) != site) return;
+        final boolean errorAddress = url.startsWith("chrome-error:") || url.startsWith("data:text/html,chromewebdata");
         final String target = UrlRouter.siteFor(url) == site ? url
                 : mLastSiteUrl != null ? mLastSiteUrl : account.homeUrl(site);
         final String title = view.getTitle();
@@ -820,9 +822,9 @@ public final class BrowserTab {
                         boolean errorDoc = !noAnswer && (v.startsWith("\"chrome-error:")
                                 || v.startsWith("\"data:text/html,chromewebdata"));
                         boolean errorTitle = title != null && ERROR_TITLE.matcher(title).find();
-                        // No answer from the page: the error page if its address isn't a web
-                        // page's or it has the engine's error title.
-                        boolean isError = errorDoc || (noAnswer && (!UrlRouter.isHttp(url) || errorTitle));
+                        // No answer from the page: the error page if the engine gave its error
+                        // address or its error title.
+                        boolean isError = errorDoc || (noAnswer && (errorAddress || errorTitle));
                         if (isError || errorTitle || !UrlRouter.isHttp(url)) {
                             Log.i(TAG, key + ": page check " + url + " title=" + title + " -> "
                                     + (v == null ? "null" : v.substring(0, Math.min(160, v.length()))));
