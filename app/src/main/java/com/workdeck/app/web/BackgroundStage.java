@@ -8,7 +8,7 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
-import android.os.Looper;
+import android.os.HandlerThread;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
@@ -31,6 +31,8 @@ final class BackgroundStage {
     private final Context mApp;
     private VirtualDisplay mDisplay;
     private ImageReader mReader;
+    /** Frees the window's frames - never on the main thread (see create()). */
+    private HandlerThread mFrames;
     private FrameLayout mRoot;
     private boolean mFailed;
 
@@ -63,8 +65,14 @@ final class BackgroundStage {
         DisplayMetrics dm = mApp.getResources().getDisplayMetrics();
         int w = Math.max(1, dm.widthPixels);
         int h = Math.max(1, dm.heightPixels);
-        Handler main = new Handler(Looper.getMainLooper());
-        mReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2);
+        // The window's frames must be freed on a thread of their own. The app's render thread
+        // draws this window and the screen's; if no frame buffer is free it waits, and the
+        // main thread waits for the render thread whenever it draws the screen - so freeing
+        // the buffers on the main thread could deadlock both ("isn't responding").
+        mFrames = new HandlerThread("workdeck-stage-frames");
+        mFrames.start();
+        Handler frames = new Handler(mFrames.getLooper());
+        mReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3);
         mReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader r) {
@@ -74,7 +82,7 @@ final class BackgroundStage {
                 } catch (Throwable ignored) {
                 }
             }
-        }, main);
+        }, frames);
         DisplayManager dmgr = (DisplayManager) mApp.getSystemService(Context.DISPLAY_SERVICE);
         // Flags 0 = a private display owned by WorkDeck (no permission needed, nothing shown).
         mDisplay = dmgr.createVirtualDisplay("workdeck-background", w, h, dm.densityDpi, mReader.getSurface(), 0);
@@ -103,6 +111,8 @@ final class BackgroundStage {
             if (mReader != null) mReader.close();
         } catch (Throwable ignored) {
         }
+        if (mFrames != null) mFrames.quitSafely();
+        mFrames = null;
         mDisplay = null;
         mReader = null;
         mRoot = null;
