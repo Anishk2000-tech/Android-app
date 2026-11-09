@@ -1297,6 +1297,9 @@
     };
     document.addEventListener('DOMContentLoaded', function () { setTimeout(checkBlocked, 300); });
     window.addEventListener('load', function () { setTimeout(checkBlocked, 800); setTimeout(checkBlocked, 3000); });
+    // Older WebViews can't run this script at document start: it's added when the page has
+    // already loaded, after those events - check right away then.
+    if (document.readyState !== 'loading') { setTimeout(checkBlocked, 300); setTimeout(checkBlocked, 2000); }
   }
 
   // Microsoft says the browser is too old -> ask native to suggest a WebView update.
@@ -1310,6 +1313,7 @@
       } catch (e) {}
     };
     window.addEventListener('load', function () { setTimeout(checkUnsupported, 4000); setTimeout(checkUnsupported, 15000); });
+    if (document.readyState === 'complete') { setTimeout(checkUnsupported, 4000); setTimeout(checkUnsupported, 15000); }
   }
 
   log('installed in ' + location.origin + (isTop ? ' (top)' : ' (frame)'));

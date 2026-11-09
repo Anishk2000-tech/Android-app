@@ -970,6 +970,18 @@ test('company sign-in policy pages ("You must use Microsoft Edge") are recognise
   };
   assert.deepStrictEqual(await signals('/ca-blocked.html'), ['access_blocked:edge-required']);
   assert.deepStrictEqual(await signals('/chat-mentions.html'), [], 'a chat message with the same words is not a sign-in block');
+  // Older WebViews add WorkDeck's script only once the page has loaded (no document-start
+  // scripts): the policy page must still be recognised.
+  const ctx = await b.newContext();
+  const page = await ctx.newPage();
+  await page.goto(base + '/ca-blocked.html');
+  await page.waitForLoadState('load');
+  await page.evaluate(BRIDGE_MOCK);
+  await page.addScriptTag({ content: script({ site: 'outlook', desktop: false, desktopLayout: false }) });
+  await page.waitForTimeout(1200);
+  const late = await page.evaluate(() => window.__calls.filter((c) => c.name === 'callSignal').map((c) => c.args[1] + ':' + c.args[2]));
+  await ctx.close();
+  assert.deepStrictEqual(late, ['access_blocked:edge-required'], 'recognised when the script arrives after the page loaded');
 });
 
 (async () => {

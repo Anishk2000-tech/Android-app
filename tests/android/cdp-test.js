@@ -171,6 +171,8 @@ async function connectAll() {
   const shown = await waitFor(() => wdNotifs().some((r) => r.includes('WorkDeck CI message')), 10000);
   check(shown, 'page notification shows as an Android notification');
   check(wdNotifs().some((r) => r.includes('WorkDeck CI message') && r.includes('channel=teams_messages')), 'posted on the "Teams messages" channel');
+  // The sound starts once the sound file is loaded - a moment after the notification.
+  await waitFor(() => /playing message sound/.test(sh('adb logcat -d -s WorkDeck/Sound')), 6000);
   const soundLog = sh('adb logcat -d -s WorkDeck/Sound');
   check(/playing message sound at 300%/.test(soundLog), 'WorkDeck plays the message sound itself, at 300% loudness', (soundLog.match(/playing[^\n]*/) || [''])[0]);
   if (!shown) diag('page notification');
