@@ -19,7 +19,7 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 ---
 
 ## Single-app editions: OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook (1.0.1)
-**1.0.1:** after a fresh sign-in, Teams could stop at Android's *"Webpage not available … net::ERR_FAILED"* page with no way out. That error came from Teams' own background helper (its service worker) failing to deliver the page, and these apps have no menu to reload. Now the app recovers by itself:
+**1.0.1:** after a fresh sign-in, Teams could stop at Android's *"Webpage not available … net::ERR_FAILED"* page with no way out. The most likely cause is Teams' own background helper (its service worker) failing to deliver the page; Android shows its error page then without telling the app, and these apps have no menu to reload. Now the app recovers by itself:
 * it reloads;
 * if that fails too, it removes Teams' service worker and stored files (your sign-in stays) and loads Teams again;
 * if Teams' service worker comes back and breaks the page again, it turns service workers off for Teams in that app (notifications don't need them) and loads it again;
