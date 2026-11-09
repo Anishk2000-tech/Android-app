@@ -777,25 +777,64 @@ public final class BrowserTab {
 
     /**
      * Some failures (e.g. a site's service worker failing its page) show the engine's own
-     * "Webpage not available" page without any error callback. So when the site's page has
-     * finished loading, look whether it is that error page (chrome-error:) and, if so,
-     * recover the same way (reload, clear the site's storage, ...) or show WorkDeck's
-     * error screen with Retry.
+     * "Webpage not available" page without any error callback, and the address the engine
+     * reports for it may be its own (chrome-error://...) instead of the site's. So whenever
+     * the tab's page has loaded (page finished, progress 100 %, or a few seconds after it
+     * started), look whether it is that error page and, if so, recover the same way
+     * (reload, clear the site's storage, ...) or show WorkDeck's error screen with Retry.
      */
+    private String mLastSiteUrl;
+    private long mErrorCheckAt;
+    private static final java.util.regex.Pattern ERROR_TITLE = java.util.regex.Pattern.compile(
+            "(?i)webpage not available|page not available|net::ERR_");
+    private static final java.util.regex.Pattern NET_ERROR = java.util.regex.Pattern.compile("net::ERR_[A-Z_]+");
+
+    /** Checks soon whether the tab's page is the engine's error page (debounced). */
+    private void scheduleErrorCheck(final WebView view, final String url, long delayMs) {
+        if (view != mWebView || web != null) return;
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (view != mWebView || mWebView == null) return;
+                if (SystemClock.elapsedRealtime() - mErrorCheckAt < 800) return;
+                mErrorCheckAt = SystemClock.elapsedRealtime();
+                checkErrorPage(view, url != null ? url : view.getUrl());
+            }
+        }, delayMs);
+    }
+
     private void checkErrorPage(final WebView view, final String url) {
         if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return; // already handled
-        view.evaluateJavascript("(function () { try { return location.protocol + '|' + "
-                + "(document.body ? document.body.innerText.slice(0, 600) : ''); } catch (e) { return ''; } })()",
+        // Another site's real page (the sign-in page, a link) is not an error page.
+        if (UrlRouter.isHttp(url) && UrlRouter.siteFor(url) != site) return;
+        final String target = UrlRouter.siteFor(url) == site ? url
+                : mLastSiteUrl != null ? mLastSiteUrl : account.homeUrl(site);
+        final String title = view.getTitle();
+        view.evaluateJavascript("(function () { try { return location.href + '|' + document.title + '|' + "
+                + "(document.body ? document.body.innerText.slice(0, 600) : ''); } catch (e) { return 'x|' + e; } })()",
                 new android.webkit.ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String v) {
-                        if (v == null || !v.startsWith("\"chrome-error:")) return;
-                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("net::ERR_[A-Z_]+").matcher(v);
+                        if (view != mWebView) return;
+                        boolean noAnswer = v == null || v.isEmpty() || "null".equals(v);
+                        boolean errorDoc = !noAnswer && (v.startsWith("\"chrome-error:")
+                                || v.startsWith("\"data:text/html,chromewebdata"));
+                        boolean errorTitle = title != null && ERROR_TITLE.matcher(title).find();
+                        // No answer from the page: the error page if its address isn't a web
+                        // page's or it has the engine's error title.
+                        boolean isError = errorDoc || (noAnswer && (!UrlRouter.isHttp(url) || errorTitle));
+                        if (isError || errorTitle || !UrlRouter.isHttp(url)) {
+                            Log.i(TAG, key + ": page check " + url + " title=" + title + " -> "
+                                    + (v == null ? "null" : v.substring(0, Math.min(160, v.length()))));
+                        }
+                        if (!isError) return;
+                        java.util.regex.Matcher m = NET_ERROR.matcher(v == null ? "" : v);
                         String desc = m.find() ? m.group() : "net::ERR_FAILED";
-                        if (desc.contains("ERR_ABORTED") || view != mWebView) return;
+                        if (desc.contains("ERR_ABORTED")) return;
                         if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return;
+                        mErrorReportedAt = SystemClock.elapsedRealtime();
                         Log.w(TAG, key + ": the page shows the engine's error page (" + desc + ")");
-                        if (selfHeal(view, url, desc)) return;
+                        if (selfHeal(view, target, desc)) return;
                         mError = desc;
                         changed();
                     }
@@ -1071,6 +1110,11 @@ public final class BrowserTab {
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             mLoadedAt = SystemClock.elapsedRealtime();
             mError = null;
+            if (view == mWebView && web == null) {
+                if (UrlRouter.siteFor(url) == site) mLastSiteUrl = url;
+                if (!UrlRouter.isHttp(url) || UrlRouter.siteFor(url) == site) Log.i(TAG, key + ": page started " + url);
+                scheduleErrorCheck(view, url, 6000); // in case no "finished" comes
+            }
             CallManager.get(mApp).resetPageMic(key);
             Notifier.get(mApp).resetUnreadBaseline(key);
             if (!mDocStartSupported && UrlRouter.isInjectable(url)) view.evaluateJavascript(buildScript(), null);
@@ -1089,7 +1133,10 @@ public final class BrowserTab {
                     && (url.contains("/dl/launcher") || url.contains("/l/meetup-join") || url.contains("/l/"))) {
                 chooseWebAppOnLauncher(0);
             }
-            if (view == mWebView && web == null && UrlRouter.siteFor(url) == site) checkErrorPage(view, url);
+            if (view == mWebView && web == null) {
+                if (!UrlRouter.isHttp(url) || UrlRouter.siteFor(url) == site) Log.i(TAG, key + ": page finished " + url);
+                scheduleErrorCheck(view, url, 0);
+            }
             changed();
         }
 
@@ -1152,6 +1199,7 @@ public final class BrowserTab {
     private class TabChromeClient extends WebChromeClient {
         @Override
         public void onProgressChanged(WebView view, int newProgress) {
+            if (newProgress == 100 && mProgress != 100) scheduleErrorCheck(view, null, 300);
             mProgress = newProgress;
             changed();
         }

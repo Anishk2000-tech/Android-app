@@ -263,7 +263,9 @@ async function selfHeal(p) {
   const log = sh('adb logcat -d -s WorkDeck/Tab');
   check('Teams page fails (net::ERR_FAILED): the app reloads, then clears Teams\' service worker and stored files by itself',
     /ERR_FAILED loading https:\/\/teams\.microsoft\.com\/v2\/ \(attempt 1\)/.test(log) && healed,
-    log.split('\n').filter((l) => /attempt|removed/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Tab: /, '')).join(' | '));
+    log.split('\n').filter((l) => /attempt|removed|page (started|finished|check)|error page/.test(l))
+      .map((l) => l.replace(/^.*WorkDeck\/Tab: /, '')).slice(0, 14).join(' | ')
+      + ' || page: ' + JSON.stringify(await p.eval('location.href + " / " + document.title', 4000)));
   const swOff = await waitFor(() => /service workers off for this site/.test(sh('adb logcat -d -s WorkDeck/Tab')), 20000);
   check('failing again: the app turns Teams\' service worker off and loads Teams again', swOff);
   await sleep(7000);
