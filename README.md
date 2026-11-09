@@ -199,6 +199,19 @@ setup screen; both tabs load; keep-alive foreground service (with microphone + c
 
 **Added in 1.4.0 and verified on all three emulators (Android 15, 14, 12):** pages that aren't on screen run at full speed — measured with a 100 ms timer: 40 ticks in 4 s for a tab that isn't on screen, for every page with WorkDeck in the background, and with WorkDeck swiped away from Recents (before 1.4.0: 4–5 ticks, i.e. slowed down 10×, and worse after a few minutes) — while the page is told it's hidden and still gets its screen updates; the invisible background window is created; mail that arrives while Outlook reloads still raises a notification.
 
+**Single-app editions 1.0.0, verified on all three emulators (Android 15, 14, 12), installed side by side with WorkDeck:**
+* **Setup:** each of the four apps opens its own permissions screen. The Teams apps ask for microphone and camera; the Outlook apps don't.
+* **Screen and identity:** only the page and the **Aa** control are on screen. Pages use mobile view (412 px wide). The Teams apps and OMC Outlook present a computer browser; CRAFTWW Outlook presents a phone browser. Each app's running notification names it ("OMC Teams is connected").
+* **Text size:** **A+** makes text bigger (100% → 110%).
+* **Calls, tested with a real two-way call inside the page:**
+  * the call is detected from its connection, and Teams' saved microphone at call start is not taken as a choice;
+  * the sound goes to a device of the phone, and the call-audio button appears and offers the phone's devices;
+  * the call keeps going while Teams closes the microphone; it ends, and the button goes away, when the connection closes.
+* **Links:** a link opens inside the app with a **×**, and Back closes it. An Outlook link in OMC Teams opens the **OMC Outlook** app.
+* **Stability:** no crash, and the apps never stopped responding.
+* **Not testable on the emulators:** the earpiece and Bluetooth, because the emulators have neither.
+* **Also fixed along the way, in the code shared with WorkDeck:** a deadlock between the invisible background window and the screen that could make the app stop responding when it came back to the front.
+
 **Added in 1.4.2 and verified on all three emulators (Android 15, 14, 12):** while the user looks at Teams in WorkDeck, the chat is visible, focused and reported on screen (messages can be read). With WorkDeck in the background, and when a ringing call brings WorkDeck to the front (over the lock screen or after waking the screen), Teams is told it's hidden and unfocused, and no message is reported on screen, so nothing gets *Seen*. When the ringing stops, WorkDeck is no longer shown over the lock screen; once the phone is unlocked and touched, the chat counts as looked at again. All earlier checks still pass.
 
 **Added in 1.4.1 and verified on all three emulators (Android 15, 14, 12):** when Outlook in mobile view gets the company sign-in page *"You can't get there from here — You must use Microsoft Edge"* (served to the real WebView as a stand-in, since the CI has no company account), WorkDeck switches that tab to a computer (Windows) identity, keeps the phone layout and loads Outlook again; WorkDeck's process never restarted during the test. All earlier checks still pass.
