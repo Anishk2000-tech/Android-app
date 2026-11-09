@@ -230,6 +230,19 @@
     });
   }
 
+  // ------------------------------------------------------------------ service workers off
+  // WorkDeck turned service workers off for this site because its worker kept failing to
+  // serve the page (net::ERR_FAILED). Registration fails as in a private window; sites
+  // work without one.
+  if (CFG.blockServiceWorker && navigator.serviceWorker) {
+    try {
+      var swProto = Object.getPrototypeOf(navigator.serviceWorker);
+      hidden(swProto, 'register', function () {
+        return Promise.reject(new DOMException('Service workers are turned off for this site', 'SecurityError'));
+      });
+    } catch (e) {}
+  }
+
   // ------------------------------------------------------------------ identity
   function installUAData(low, high) {
     var proto = (typeof NavigatorUAData !== 'undefined' && NavigatorUAData.prototype) || Object.prototype;

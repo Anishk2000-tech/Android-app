@@ -325,6 +325,7 @@ public final class BrowserTab {
             cfg.put("site", site == null ? "web" : site.key);
             cfg.put("desktop", desktopIdentity);
             cfg.put("desktopLayout", mDesktop);
+            cfg.put("blockServiceWorker", serviceWorkerOff());
             cfg.put("desktopWidth", mPrefs.desktopWidth());
             cfg.put("notifications", true);
             cfg.put("fullVersion", UserAgents.chromeFull());
@@ -770,6 +771,24 @@ public final class BrowserTab {
     private int mHealAttempts;
     private long mHealWindowStart;
 
+    /** Service workers turned off for this tab's site (its worker kept breaking the page). */
+    private boolean serviceWorkerOff() {
+        return web == null && mPrefs.raw().getBoolean("sw_off_" + key, false);
+    }
+
+    /** Removes the site's service worker, caches and stored files (cookies, i.e. the sign-in, stay). */
+    private void clearSiteStorage(String url) {
+        try {
+            android.net.Uri u = android.net.Uri.parse(url);
+            String origin = u.getScheme() + "://" + u.getHost();
+            android.webkit.WebStorage ws = WebViewSupport.webStorage(account.profile);
+            if (ws != null) ws.deleteOrigin(origin);
+            Log.w(TAG, key + ": removed " + origin + "'s service worker and stored files; loading again");
+        } catch (Throwable t) {
+            Log.w(TAG, "could not clear the site's storage", t);
+        }
+    }
+
     /**
      * The site's own page failed with a generic error (net::ERR_FAILED) - typically the
      * site's service worker failing to serve its page (seen with Teams right after a fresh
@@ -796,16 +815,23 @@ public final class BrowserTab {
             }, 1500);
             return true;
         }
+        if (mHealAttempts == 3 && !serviceWorkerOff()) {
+            // The site's service worker came back and broke its page again: turn service
+            // workers off for this site here (notifications don't need them in WorkDeck).
+            mPrefs.raw().edit().putBoolean("sw_off_" + key, true).apply();
+            Log.w(TAG, key + ": service workers off for this site; loading again");
+            clearSiteStorage(url);
+            registerScript();
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (mWebView != null) mWebView.loadUrl(target);
+                }
+            }, 1500);
+            return true;
+        }
         if (mHealAttempts == 2) {
-            try {
-                android.net.Uri u = android.net.Uri.parse(url);
-                String origin = u.getScheme() + "://" + u.getHost();
-                android.webkit.WebStorage ws = WebViewSupport.webStorage(account.profile);
-                if (ws != null) ws.deleteOrigin(origin);
-                Log.w(TAG, key + ": removed " + origin + "'s service worker and stored files; loading again");
-            } catch (Throwable t) {
-                Log.w(TAG, "could not clear the site's storage", t);
-            }
+            clearSiteStorage(url);
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {

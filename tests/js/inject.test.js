@@ -955,6 +955,17 @@ test('IntersectionObserver keeps working normally while the user looks (incl. su
   await ctx2.close();
 });
 
+test('service workers can be turned off for a site (its worker kept breaking the page)', async (b, base) => {
+  const off = await newPage(b, base, { blockServiceWorker: true }, '/sw.html');
+  const r1 = await off.page.evaluate(() => navigator.serviceWorker.register('/sw.js').then(() => 'registered', (e) => 'refused:' + e.name));
+  await off.ctx.close();
+  assert.strictEqual(r1, 'refused:SecurityError', 'turned off: registration refused like in a private window');
+  const on = await newPage(b, base, {}, '/sw.html');
+  const r2 = await on.page.evaluate(() => navigator.serviceWorker.register('/sw.js').then(() => 'registered', (e) => 'refused:' + e.name));
+  await on.ctx.close();
+  assert.strictEqual(r2, 'registered', 'normally: service workers work');
+});
+
 test('company sign-in policy pages ("You must use Microsoft Edge") are recognised; ordinary pages are not', async (b, base) => {
   PAGES['/ca-blocked.html'] = `<!doctype html><html><head><title>Sign in to your account</title>
     <script>window.$Config = { iErrorCode: 53005, strServiceExceptionMessage: 'AADSTS53005: Application needs to enforce Intune protection policies.' };</script>
