@@ -770,6 +770,37 @@ public final class BrowserTab {
      */
     private int mHealAttempts;
     private long mHealWindowStart;
+    private long mErrorReportedAt;
+    private static final java.util.regex.Pattern CONNECTIVITY_ERROR = java.util.regex.Pattern.compile(
+            "ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|CONNECTION_[A-Z_]+|TIMED_OUT|"
+                    + "NETWORK_[A-Z_]+|ADDRESS_[A-Z_]+|PROXY_[A-Z_]+|SSL_[A-Z_]+|CERT_[A-Z_]+|TUNNEL_[A-Z_]+)");
+
+    /**
+     * Some failures (e.g. a site's service worker failing its page) show the engine's own
+     * "Webpage not available" page without any error callback. So when the site's page has
+     * finished loading, look whether it is that error page (chrome-error:) and, if so,
+     * recover the same way (reload, clear the site's storage, ...) or show WorkDeck's
+     * error screen with Retry.
+     */
+    private void checkErrorPage(final WebView view, final String url) {
+        if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return; // already handled
+        view.evaluateJavascript("(function () { try { return location.protocol + '|' + "
+                + "(document.body ? document.body.innerText.slice(0, 600) : ''); } catch (e) { return ''; } })()",
+                new android.webkit.ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String v) {
+                        if (v == null || !v.startsWith("\"chrome-error:")) return;
+                        java.util.regex.Matcher m = java.util.regex.Pattern.compile("net::ERR_[A-Z_]+").matcher(v);
+                        String desc = m.find() ? m.group() : "net::ERR_FAILED";
+                        if (desc.contains("ERR_ABORTED") || view != mWebView) return;
+                        if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return;
+                        Log.w(TAG, key + ": the page shows the engine's error page (" + desc + ")");
+                        if (selfHeal(view, url, desc)) return;
+                        mError = desc;
+                        changed();
+                    }
+                });
+    }
 
     /** Service workers turned off for this tab's site (its worker kept breaking the page). */
     private boolean serviceWorkerOff() {
@@ -798,6 +829,9 @@ public final class BrowserTab {
      */
     private boolean selfHeal(WebView view, String url, String desc) {
         if (view != mWebView || web != null || UrlRouter.siteFor(url) != site) return false;
+        // Network trouble (offline, no DNS, timeouts, certificates) is shown as it is and
+        // retried when the network is back - clearing the site's data wouldn't help.
+        if (CONNECTIVITY_ERROR.matcher(desc).find()) return false;
         long now = SystemClock.elapsedRealtime();
         if (now - mHealWindowStart > 120000) {
             mHealWindowStart = now;
@@ -1055,6 +1089,7 @@ public final class BrowserTab {
                     && (url.contains("/dl/launcher") || url.contains("/l/meetup-join") || url.contains("/l/"))) {
                 chooseWebAppOnLauncher(0);
             }
+            if (view == mWebView && web == null && UrlRouter.siteFor(url) == site) checkErrorPage(view, url);
             changed();
         }
 
@@ -1067,8 +1102,10 @@ public final class BrowserTab {
             if (code == ERROR_UNKNOWN) {
                 // Cancelled navigations (downloads, app links, a newer navigation) are not errors.
                 if (desc.contains("ERR_ABORTED") || !desc.contains("ERR_")) return;
+                mErrorReportedAt = SystemClock.elapsedRealtime();
                 if (selfHeal(view, request.getUrl().toString(), desc)) return;
             }
+            mErrorReportedAt = SystemClock.elapsedRealtime();
             mError = desc;
             changed();
         }
