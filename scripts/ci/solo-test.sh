@@ -42,7 +42,7 @@ if grep -aq "ANR in com.workdeck" ci-out/logcat-stream.txt 2>/dev/null; then
   timeout 30 adb root >/dev/null 2>&1; sleep 4; timeout 60 adb wait-for-device
   for f in $(timeout 20 adb shell ls -t /data/anr 2>/dev/null | tr -d '\r' | head -4); do
     timeout 20 adb shell cat "/data/anr/$f" 2>/dev/null | tr -d '\r' \
-      | awk '/^Cmd line: com\.workdeck/{p=1} p && /^"main"/{m=1} m{print; n++} n>=40{exit}'
-  done | head -90 | tee "$OUT/anr-main-thread.txt"
+      | awk '/^Cmd line:/{p=($0 ~ /com\.workdeck/)} p && /^"(main|RenderThread|workdeck-stage-frames)"/{m=1; n=0} m && /^$/{m=0} m && n<26{print; n++}'
+  done | head -160 | tee "$OUT/anr-main-thread.txt"
 fi
 exit $fail

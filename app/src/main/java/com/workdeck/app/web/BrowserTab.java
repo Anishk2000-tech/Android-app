@@ -862,7 +862,14 @@ public final class BrowserTab {
                             Log.i(TAG, key + ": page check " + url + " (" + progress + "%) title=" + title + " -> "
                                     + (v == null ? "null" : v.substring(0, Math.min(100, v.length()))));
                         }
-                        if (!isError) return;
+                        if (!isError) {
+                            // The site's own page is there again: a later failure starts over.
+                            if (mHealAttempts > 0 && v != null && v.startsWith("\"https://" + UrlRouter.host(target))) {
+                                Log.i(TAG, key + ": the page loads again (after " + mHealAttempts + " recovery step(s))");
+                                mHealAttempts = 0;
+                            }
+                            return;
+                        }
                         java.util.regex.Matcher m = NET_ERROR.matcher(v == null ? "" : v);
                         String desc = m.find() ? m.group() : "net::ERR_FAILED";
                         if (desc.contains("ERR_ABORTED")) return;
@@ -881,11 +888,17 @@ public final class BrowserTab {
         return web == null && mPrefs.raw().getBoolean("sw_off_" + key, false);
     }
 
-    /** Removes the site's service worker, caches and stored files (cookies, i.e. the sign-in, stay). */
+    /**
+     * Removes the site's service worker, caches and stored files (cookies, i.e. the sign-in,
+     * stay). The engine's storage API leaves service workers and their caches alone, so the
+     * worker is replaced at its next update (which loading the page triggers) by one that
+     * deletes its caches and unregisters itself.
+     */
     private void clearSiteStorage(String url) {
         try {
             android.net.Uri u = android.net.Uri.parse(url);
             String origin = u.getScheme() + "://" + u.getHost();
+            SwShim.removeOnce(account.profile, UrlRouter.host(url));
             android.webkit.WebStorage ws = WebViewSupport.webStorage(account.profile);
             if (ws != null) ws.deleteOrigin(origin);
             Log.w(TAG, key + ": removed " + origin + "'s service worker and stored files; loading again");
@@ -950,22 +963,25 @@ public final class BrowserTab {
         mHealAttempts++;
         Log.w(TAG, key + ": " + desc + " loading " + url + " (attempt " + mHealAttempts + ")");
         final String target = url;
-        if (mHealAttempts == 1) {
-            loadAgainSoon(target);
-            return true;
-        }
-        if (mHealAttempts == 3 && !serviceWorkerOff()) {
-            // The site's service worker came back and broke its page again: turn service
-            // workers off for this site here (notifications don't need them in WorkDeck).
-            mPrefs.raw().edit().putBoolean("sw_off_" + key, true).apply();
-            Log.w(TAG, key + ": service workers off for this site; loading again");
-            clearSiteStorage(url);
-            registerScript();
+        // 1: load again. 2: remove the site's service worker and stored files, load again
+        // (that load may still go through the old worker, it triggers its removal). 3: load
+        // again. 4: still failing: service workers off for this site here (notifications
+        // don't need them in WorkDeck), load again. Then WorkDeck's error screen (Retry).
+        if (mHealAttempts == 1 || mHealAttempts == 3) {
             loadAgainSoon(target);
             return true;
         }
         if (mHealAttempts == 2) {
             clearSiteStorage(url);
+            loadAgainSoon(target);
+            return true;
+        }
+        if (mHealAttempts == 4 && !serviceWorkerOff()) {
+            mPrefs.raw().edit().putBoolean("sw_off_" + key, true).apply();
+            SwShim.keepOff(mApp, account.profile, UrlRouter.host(url));
+            Log.w(TAG, key + ": service workers off for this site; loading again");
+            clearSiteStorage(url);
+            registerScript();
             loadAgainSoon(target);
             return true;
         }
@@ -1132,7 +1148,7 @@ public final class BrowserTab {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            return SwShim.maybeIntercept(mApp, request, cookies());
+            return SwShim.maybeIntercept(mApp, account.profile, request, cookies());
         }
 
         @Override
@@ -1216,7 +1232,7 @@ public final class BrowserTab {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            return SwShim.maybeIntercept(mApp, request, cookies());
+            return SwShim.maybeIntercept(mApp, account.profile, request, cookies());
         }
 
         @Override

@@ -272,7 +272,9 @@ async function selfHeal(p) {
       + ' || test: ' + documents.join(', '));
   const swOff = await waitFor(() => /service workers off for this site/.test(sh('adb logcat -d -s WorkDeck/Tab')), 20000);
   check('failing again: the app turns Teams\' service worker off and loads Teams again', swOff);
-  await sleep(7000);
+  const sw = sh('adb logcat -d -s WorkDeck/SwShim').split('\n').filter((l) => /replaced/.test(l));
+  console.log('  NOTE: Teams\' service worker replaced by the remover ' + sw.length + ' time(s)');
+  await waitFor(() => /Can.t load this page/.test(texts('omcTeams-erroring')), 25000);
   let t = texts('omcTeams-error');
   shot('omcTeams-error');
   check('still failing after that: the app\'s own error screen with Retry (not a dead end)', /Can.t load this page/.test(t) && /ERR_FAILED/.test(t) && /\nRetry\n/i.test('\n' + t + '\n'),

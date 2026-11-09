@@ -63,7 +63,7 @@ public final class TabManager {
     }
 
     /** Service-worker requests of each profile go through the notification shim. */
-    private void initProfile(String profile) {
+    private void initProfile(final String profile) {
         if (!mProfilesReady.add(profile)) return;
         try {
             ServiceWorkerController swc = WebViewSupport.serviceWorkers(profile);
@@ -72,7 +72,7 @@ public final class TabManager {
             swc.setServiceWorkerClient(new ServiceWorkerClient() {
                 @Override
                 public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
-                    return SwShim.maybeIntercept(mApp, request, cookies);
+                    return SwShim.maybeIntercept(mApp, profile, request, cookies);
                 }
             });
         } catch (Throwable t) {

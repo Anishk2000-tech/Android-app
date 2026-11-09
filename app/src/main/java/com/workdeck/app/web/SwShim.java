@@ -15,10 +15,13 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Prepends sw-shim.js to Microsoft service-worker scripts (identified by the
@@ -30,7 +33,44 @@ final class SwShim {
     private static final int MAX_BYTES = 12 * 1024 * 1024;
     private static byte[] sShim;
 
+    /**
+     * Served instead of a site's own service worker when that worker keeps failing the
+     * site's page: it takes over at once, deletes the site's caches and unregisters
+     * itself, so the page comes from the network again. It has no fetch handler, so
+     * while it is there requests simply go to the network.
+     */
+    private static final String REMOVER = "/* WorkDeck: this site's service worker kept failing its page;"
+            + " this one removes it and its caches. */\n"
+            + "self.addEventListener('install', function () { self.skipWaiting(); });\n"
+            + "self.addEventListener('activate', function (e) {\n"
+            + "  e.waitUntil(caches.keys().then(function (ks) {\n"
+            + "    return Promise.all(ks.map(function (k) { return caches.delete(k); }));\n"
+            + "  }).catch(function () {}).then(function () { return self.registration.unregister(); }));\n"
+            + "});\n";
+
+    /** "profile|host" whose service worker is replaced by the remover at its next update. */
+    private static final Set<String> sRemoveOnce = Collections.synchronizedSet(new HashSet<String>());
+
     private SwShim() {}
+
+    /** Remove the site's service worker (and its caches) at its next update check. */
+    static void removeOnce(String profile, String host) {
+        sRemoveOnce.add(profile + "|" + host);
+    }
+
+    /** Keep the site's service workers off in this profile (each one removes itself). */
+    static void keepOff(Context c, String profile, String host) {
+        Prefs.get(c).raw().edit().putBoolean("sw_kill_" + profile + "|" + host, true).apply();
+    }
+
+    private static WebResourceResponse remover(String host) {
+        Log.w(TAG, "replaced " + host + "'s service worker with one that removes it and its caches");
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Service-Worker-Allowed", "/"); // whatever scope the site's worker had
+        headers.put("Cache-Control", "no-store");
+        return new WebResourceResponse("application/javascript", StandardCharsets.UTF_8.name(), 200, "OK",
+                headers, new ByteArrayInputStream(REMOVER.getBytes(StandardCharsets.UTF_8)));
+    }
 
     private static String header(Map<String, String> headers, String name) {
         if (headers == null) return null;
@@ -47,11 +87,14 @@ final class SwShim {
         return sShim;
     }
 
-    static WebResourceResponse maybeIntercept(Context c, WebResourceRequest req, CookieManager cookies) {
+    static WebResourceResponse maybeIntercept(Context c, String profile, WebResourceRequest req, CookieManager cookies) {
         try {
             if (req == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
             if (!"script".equalsIgnoreCase(header(req.getRequestHeaders(), "Service-Worker"))) return null;
             String url = req.getUrl().toString();
+            String host = UrlRouter.host(url);
+            String k = profile + "|" + host;
+            if (sRemoveOnce.remove(k) || Prefs.get(c).raw().getBoolean("sw_kill_" + k, false)) return remover(host);
             if (!UrlRouter.isInjectable(url) || !Prefs.get(c).swShim()) return null;
             return fetchWithShim(c, url, req.getRequestHeaders(), cookies);
         } catch (Throwable t) {
