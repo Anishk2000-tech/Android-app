@@ -254,8 +254,11 @@ async function selfHeal(p) {
   sh('adb logcat -c');
   let failing = true;
   await p.send('Fetch.enable', { patterns: [{ urlPattern: 'https://teams.microsoft.com/*', requestStage: 'Request' }] });
+  const documents = []; // what the test did with each Teams page request (diagnostics)
   p.on('Fetch.requestPaused', (e) => {
-    if (failing && e.resourceType === 'Document') p.send('Fetch.failRequest', { requestId: e.requestId, errorReason: 'Failed' });
+    const fail = failing && e.resourceType === 'Document';
+    if (e.resourceType === 'Document') documents.push((fail ? 'failed ' : 'let through ') + e.request.url.replace(/[?#].*/, '').slice(0, 50));
+    if (fail) p.send('Fetch.failRequest', { requestId: e.requestId, errorReason: 'Failed' });
     else p.send('Fetch.continueRequest', { requestId: e.requestId });
   });
   await p.send('Page.navigate', { url: 'https://teams.microsoft.com/v2/' });
@@ -265,7 +268,8 @@ async function selfHeal(p) {
     /ERR_FAILED loading https:\/\/teams\.microsoft\.com\/v2\/ \(attempt 1\)/.test(log) && healed,
     log.split('\n').filter((l) => /attempt|removed|page (started|finished|check)|error page/.test(l))
       .map((l) => l.replace(/^.*WorkDeck\/Tab: /, '')).slice(0, 14).join(' | ')
-      + ' || page: ' + JSON.stringify(await p.eval('location.href + " / " + document.title', 4000)));
+      + ' || page: ' + JSON.stringify(await p.eval('location.href + " / " + document.title', 4000))
+      + ' || test: ' + documents.join(', '));
   const swOff = await waitFor(() => /service workers off for this site/.test(sh('adb logcat -d -s WorkDeck/Tab')), 20000);
   check('failing again: the app turns Teams\' service worker off and loads Teams again', swOff);
   await sleep(7000);
@@ -273,14 +277,21 @@ async function selfHeal(p) {
   shot('omcTeams-error');
   check('still failing after that: the app\'s own error screen with Retry (not a dead end)', /Can.t load this page/.test(t) && /ERR_FAILED/.test(t) && /\nRetry\n/i.test('\n' + t + '\n'),
     t.split('\n').slice(0, 5).join(' | '));
+  // Teams works again (the test stops failing its page), then the user taps Retry.
   failing = false;
+  const before = documents.length;
+  await p.send('Fetch.disable');
+  sh('adb logcat -c');
   // Older Android shows button labels in capitals.
   ui(/\nRETRY\n/.test('\n' + t + '\n') ? 'tap "=RETRY"' : 'tap "=Retry"');
   const loaded = (x) => !/Can.t load this page|Webpage not available/.test(x);
-  await waitFor(() => loaded(texts('omcTeams-retrying')), 20000);
+  await waitFor(() => loaded(texts('omcTeams-retrying')), 25000);
   t = texts('omcTeams-retried');
-  check('Retry loads Teams again once it works', loaded(t), t.split('\n').slice(0, 3).join(' | '));
-  await p.send('Fetch.disable');
+  const ok = loaded(t);
+  check('Retry loads Teams again once it works', ok, t.split('\n').slice(0, 3).join(' | ') + (ok ? '' : ' || app: '
+    + sh('adb logcat -d -s WorkDeck/Tab').split('\n').filter((l) => /a1\|teams/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Tab: a1\|teams: /, '').slice(0, 90)).slice(-8).join(' / ')
+    + ' || page: ' + JSON.stringify(await p.eval('location.href + " / " + document.title + " / " + document.readyState', 4000))
+    + ' || test: ' + documents.slice(0, before).length + ' failed before Retry; after: ' + (documents.slice(before).join(', ') || 'none')));
 }
 
 async function siblingLink(p) {

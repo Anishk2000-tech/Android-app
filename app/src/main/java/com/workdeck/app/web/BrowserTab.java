@@ -803,6 +803,7 @@ public final class BrowserTab {
     private String mLastSiteUrl;
     private long mErrorCheckAt;
     private int mLoadSeq;
+    private int mBusyChecks;
     private static final java.util.regex.Pattern ERROR_TITLE = java.util.regex.Pattern.compile(
             "(?i)webpage not available|page not available|net::ERR_");
     private static final java.util.regex.Pattern NET_ERROR = java.util.regex.Pattern.compile("net::ERR_[A-Z_]+");
@@ -831,6 +832,16 @@ public final class BrowserTab {
         if (url == null || url.startsWith("about:")) return;
         if (UrlRouter.isHttp(url) && UrlRouter.siteFor(url) != site) return;
         final boolean errorAddress = url.startsWith("chrome-error:") || url.startsWith("data:text/html,chromewebdata");
+        // Still loading (a slow network or a slow page; the last error page stays on screen
+        // until the new page arrives): not a failure - look again in a moment (for a minute
+        // at most, then judge what's on screen).
+        final int progress = view.getProgress();
+        if (progress < 100 && mBusyChecks < 20) {
+            mBusyChecks++;
+            scheduleErrorCheck(view, null, 3000);
+            return;
+        }
+        mBusyChecks = 0;
         final String target = UrlRouter.siteFor(url) == site ? url
                 : mLastSiteUrl != null ? mLastSiteUrl : account.homeUrl(site);
         final String title = view.getTitle();
@@ -848,7 +859,7 @@ public final class BrowserTab {
                         // address or its error title.
                         boolean isError = errorDoc || (noAnswer && (errorAddress || errorTitle));
                         if (isError || errorTitle || !UrlRouter.isHttp(url)) {
-                            Log.i(TAG, key + ": page check " + url + " title=" + title + " -> "
+                            Log.i(TAG, key + ": page check " + url + " (" + progress + "%) title=" + title + " -> "
                                     + (v == null ? "null" : v.substring(0, Math.min(100, v.length()))));
                         }
                         if (!isError) return;
@@ -909,7 +920,9 @@ public final class BrowserTab {
     private void loadAgain(String url) {
         if (mWebView == null) return;
         mLoadAgainAt = SystemClock.elapsedRealtime();
+        mBusyChecks = 0;
         final int gen = ++mLoadAgainGen;
+        Log.i(TAG, key + ": loading again " + url);
         mWebView.loadUrl(url);
         if (web != null) return;
         for (long delay : new long[] {3000, 8000}) {
