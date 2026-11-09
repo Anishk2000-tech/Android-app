@@ -271,13 +271,15 @@ async function selfHeal(p) {
   await sleep(7000);
   let t = texts('omcTeams-error');
   shot('omcTeams-error');
-  check('still failing after that: the app\'s own error screen with Retry (not a dead end)', /Can.t load this page/.test(t) && /ERR_FAILED/.test(t) && /\nRetry\n/.test('\n' + t + '\n'),
+  check('still failing after that: the app\'s own error screen with Retry (not a dead end)', /Can.t load this page/.test(t) && /ERR_FAILED/.test(t) && /\nRetry\n/i.test('\n' + t + '\n'),
     t.split('\n').slice(0, 5).join(' | '));
   failing = false;
-  ui('tap "=Retry"');
-  await sleep(8000);
+  // Older Android shows button labels in capitals.
+  ui(/\nRETRY\n/.test('\n' + t + '\n') ? 'tap "=RETRY"' : 'tap "=Retry"');
+  const loaded = (x) => !/Can.t load this page|Webpage not available/.test(x);
+  await waitFor(() => loaded(texts('omcTeams-retrying')), 20000);
   t = texts('omcTeams-retried');
-  check('Retry loads Teams again once it works', !/Can.t load this page/.test(t), t.split('\n').slice(0, 3).join(' | '));
+  check('Retry loads Teams again once it works', loaded(t), t.split('\n').slice(0, 3).join(' | '));
   await p.send('Fetch.disable');
 }
 

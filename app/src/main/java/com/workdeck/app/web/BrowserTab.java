@@ -531,11 +531,17 @@ public final class BrowserTab {
             ensureStarted();
             return;
         }
+        boolean failed = mError != null || ERROR_TITLE.matcher(String.valueOf(mWebView.getTitle())).find();
         mError = null;
         mLoadAgainAt = SystemClock.elapsedRealtime(); // a failure after this is a new one
         String url = mWebView.getUrl();
-        if (url == null || url.isEmpty() || url.startsWith("about:") || url.startsWith("data:")) {
+        if (url == null || url.isEmpty() || url.startsWith("about:") || url.startsWith("data:")
+                || url.startsWith("chrome-error:")) {
             loadHome();
+        } else if (failed && web == null) {
+            // Reloading the engine's error page may just reload that page (older engines):
+            // load the site's address again instead, and look again afterwards.
+            loadAgain(UrlRouter.siteFor(url) == site ? url : mLastSiteUrl != null ? mLastSiteUrl : account.homeUrl(site));
         } else {
             mWebView.reload();
         }
@@ -819,6 +825,8 @@ public final class BrowserTab {
 
     private void checkErrorPage(final WebView view, final String url) {
         if (sameErrorAsReported()) return;
+        // Just loaded again: the old error page may still be on screen; the later checks look.
+        if (SystemClock.elapsedRealtime() - mLoadAgainAt < 1000) return;
         // No page yet, or another site's real page (the sign-in page, a link): not an error page.
         if (url == null || url.startsWith("about:")) return;
         if (UrlRouter.isHttp(url) && UrlRouter.siteFor(url) != site) return;
@@ -882,6 +890,40 @@ public final class BrowserTab {
      * service worker and cached files (the sign-in cookies stay) and load it again. Only
      * then is the error shown (with Retry). Returns true while recovering.
      */
+    private void loadAgainSoon(final String url) {
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                loadAgain(url);
+            }
+        }, 1500);
+    }
+
+    private int mLoadAgainGen;
+
+    /**
+     * Loads the site's page again (a recovery step, Reload or Retry) and looks again a little
+     * later whether it is the engine's error page: newer engines report neither "started",
+     * "finished", progress nor an error for that page, so nothing else would notice.
+     */
+    private void loadAgain(String url) {
+        if (mWebView == null) return;
+        mLoadAgainAt = SystemClock.elapsedRealtime();
+        final int gen = ++mLoadAgainGen;
+        mWebView.loadUrl(url);
+        if (web != null) return;
+        for (long delay : new long[] {3000, 8000}) {
+            mMain.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (gen != mLoadAgainGen || mWebView == null || mError != null) return;
+                    mErrorCheckAt = SystemClock.elapsedRealtime();
+                    checkErrorPage(mWebView, mWebView.getUrl());
+                }
+            }, delay);
+        }
+    }
+
     private boolean selfHeal(WebView view, String url, String desc) {
         if (view != mWebView || web != null || UrlRouter.siteFor(url) != site) return false;
         // Network trouble (offline, no DNS, timeouts, certificates) is shown as it is and
@@ -896,14 +938,7 @@ public final class BrowserTab {
         Log.w(TAG, key + ": " + desc + " loading " + url + " (attempt " + mHealAttempts + ")");
         final String target = url;
         if (mHealAttempts == 1) {
-            mMain.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (mWebView == null) return;
-                    mLoadAgainAt = SystemClock.elapsedRealtime();
-                    mWebView.reload();
-                }
-            }, 1500);
+            loadAgainSoon(target);
             return true;
         }
         if (mHealAttempts == 3 && !serviceWorkerOff()) {
@@ -913,26 +948,12 @@ public final class BrowserTab {
             Log.w(TAG, key + ": service workers off for this site; loading again");
             clearSiteStorage(url);
             registerScript();
-            mMain.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (mWebView == null) return;
-                    mLoadAgainAt = SystemClock.elapsedRealtime();
-                    mWebView.loadUrl(target);
-                }
-            }, 1500);
+            loadAgainSoon(target);
             return true;
         }
         if (mHealAttempts == 2) {
             clearSiteStorage(url);
-            mMain.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (mWebView == null) return;
-                    mLoadAgainAt = SystemClock.elapsedRealtime();
-                    mWebView.loadUrl(target);
-                }
-            }, 1500);
+            loadAgainSoon(target);
             return true;
         }
         return false;
