@@ -31,8 +31,16 @@ alive() {
 dismiss_dialogs() {
   for i in 1 2 3; do
     if python3 scripts/ci/ui.py has "isn't responding" >/dev/null 2>&1; then
-      echo "  closing a system 'isn't responding' dialog"
-      python3 scripts/ci/ui.py tap "Close app" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "Wait" >/dev/null 2>&1
+      if python3 scripts/ci/ui.py has "WorkDeck isn" >/dev/null 2>&1 || python3 scripts/ci/ui.py has "OMC isn" >/dev/null 2>&1 \
+         || python3 scripts/ci/ui.py has "CRAFTWW isn" >/dev/null 2>&1; then
+        # Our own app was slow to answer: wait (closing it would break every later check;
+        # the stall itself is reported by the crash check).
+        echo "  WorkDeck 'isn't responding' dialog: tapping Wait"
+        python3 scripts/ci/ui.py tap "=Wait" >/dev/null 2>&1
+      else
+        echo "  closing a system 'isn't responding' dialog"
+        python3 scripts/ci/ui.py tap "Close app" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "Wait" >/dev/null 2>&1
+      fi
     elif python3 scripts/ci/ui.py has "Please update Android System WebView" >/dev/null 2>&1; then
       echo "  WorkDeck asks to update this emulator's old WebView: tapping Cancel"
       python3 scripts/ci/ui.py tap "=CANCEL" >/dev/null 2>&1 || python3 scripts/ci/ui.py tap "=Cancel" >/dev/null 2>&1
@@ -131,7 +139,10 @@ echo "--- WorkDeck process deaths / native crashes (from the streamed logcat):"
 grep -aE "Process $PKG \(pid [0-9]+\) has died|Fatal signal|>>> $PKG|Abort message|backtrace:|  #[0-9]+ pc |lowmemorykiller|lmkd|am_kill.*$PKG|am_proc_died.*$PKG|Killing [0-9]+:$PKG|ANR in $PKG|Scheduling restart of crashed service $PKG" "$OUT/logcat-stream.txt" \
   | grep -av "com\.google" | head -80 | tee "$OUT/deaths.txt"
 cat "$OUT/deaths.txt" >> "$OUT/summary.txt"
-check "WorkDeck's process never died during the test" "! grep -aqE 'Process $PKG \\(pid [0-9]+\\) has died|>>> $PKG' $OUT/logcat-stream.txt"
+check "WorkDeck's process never died during the test" "! grep -aqE 'Process $PKG \\(pid [0-9]+\\) has died|>>> $PKG|am_proc_died.*,$PKG,' $OUT/logcat-stream.txt"
+echo "--- WorkDeck 'not responding' (ANR) reports:"
+grep -aA8 "ANR in $PKG" "$OUT/logcat-stream.txt" | head -40 | tee "$OUT/anr.txt"
+check "WorkDeck never stopped responding (no ANR)" "! grep -aq 'ANR in $PKG' $OUT/logcat-stream.txt"
 timeout 60 adb logcat -d > "$OUT/logcat-debug.txt"
 grep -E "WorkDeck/|E AndroidRuntime" "$OUT/logcat-debug.txt" | tail -60
 # Only WorkDeck's own process counts (other emulator apps crash now and then).

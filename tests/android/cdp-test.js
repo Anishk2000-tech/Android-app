@@ -104,8 +104,18 @@ async function pageFor(pred) {
 }
 
 /** Bottom bar: tap an account, then pick Teams or Outlook in its drop-up. */
+// An "X isn't responding" dialog: our own app gets "Wait" (closing it would break every
+// later check - the stall itself is reported by the crash check); system apps get closed.
+function dismissAnr() {
+  if (!/YES/.test(sh(`python3 scripts/ci/ui.py has "isn't responding" >/dev/null 2>&1 && echo YES`))) return false;
+  const ours = /YES/.test(sh(`(python3 scripts/ci/ui.py has "WorkDeck isn" || python3 scripts/ci/ui.py has "OMC isn" || python3 scripts/ci/ui.py has "CRAFTWW isn") >/dev/null 2>&1 && echo YES`));
+  console.log('  "isn\'t responding" dialog' + (ours ? ' for WorkDeck: Wait' : ': Close app'));
+  ui(ours ? 'tap "=Wait"' : 'tap "Close app"');
+  return true;
+}
+
 async function openApp(account, app) {
-  if (/tapped/.test(ui('has "isn\'t responding" && python3 scripts/ci/ui.py tap "Close app"'))) await sleep(1500);
+  if (dismissAnr()) await sleep(1500);
   ui(`tap "=${account}"`);
   await sleep(1500);
   ui(`tap "^${app}"`); // "Teams" or "Teams  (3)" in the drop-up

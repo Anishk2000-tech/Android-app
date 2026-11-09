@@ -28,4 +28,21 @@ if grep -aE "FATAL EXCEPTION" -A3 "$OUT/logcat.txt" | grep -q "Process: com.work
 else
   echo "PASS  [solo] no crash in the single-app editions" | tee -a ci-out/summary.txt
 fi
+if grep -aq "ANR in com.workdeck.\(omc\|craftww\)" ci-out/logcat-stream.txt 2>/dev/null; then
+  echo "FAIL  [solo] a single-app edition stopped responding (ANR)" | tee -a ci-out/summary.txt
+  grep -aA8 "ANR in com.workdeck.\(omc\|craftww\)" ci-out/logcat-stream.txt | head -30
+  fail=1
+else
+  echo "PASS  [solo] the single-app editions never stopped responding" | tee -a ci-out/summary.txt
+fi
+# Any of our apps stopped responding (also WorkDeck, earlier on this emulator): show what
+# its main thread was doing (the emulator image allows adb root).
+if grep -aq "ANR in com.workdeck" ci-out/logcat-stream.txt 2>/dev/null; then
+  echo "--- main thread when a WorkDeck app stopped responding:"
+  timeout 30 adb root >/dev/null 2>&1; sleep 4; timeout 60 adb wait-for-device
+  for f in $(timeout 20 adb shell ls -t /data/anr 2>/dev/null | tr -d '\r' | head -4); do
+    timeout 20 adb shell cat "/data/anr/$f" 2>/dev/null | tr -d '\r' \
+      | awk '/^Cmd line: com\.workdeck/{p=1} p && /^"main"/{m=1} m{print; n++} n>=40{exit}'
+  done | head -90 | tee "$OUT/anr-main-thread.txt"
+fi
 exit $fail

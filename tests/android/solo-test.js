@@ -37,8 +37,11 @@ const shot = (name) => sh(`adb exec-out screencap -p > ${path.join(OUT, name + '
 const has = (label) => sh(`python3 scripts/ci/ui.py has "${label}" >/dev/null 2>&1 && echo YES`).includes('YES');
 function dismiss() {
   for (let i = 0; i < 3; i++) {
-    if (has("isn't responding")) ui('tap "Close app"');
-    else if (has('Please update Android System WebView')) ui('tap "=Cancel"');
+    if (has("isn't responding")) ui(has('OMC isn') || has('CRAFTWW isn') || has('WorkDeck isn') ? 'tap "=Wait"' : 'tap "Close app"');
+    else if (has('Please update Android System WebView')) {
+      // Old emulator WebViews (Chrome 91 on Android 12) are too old for Teams: WorkDeck says so.
+      if (!/tapped/.test(ui('tap "=CANCEL"'))) ui('tap "=Cancel"');
+    }
     else return;
   }
 }
@@ -134,9 +137,15 @@ async function mainScreen(key, expectWindows) {
     t.split('\n').filter((l) => /account|Switch|Text size|More/.test(l)).join(' | '));
   const p = await page(app.pkg, /microsoft|office|live\.com|outlook/i, 45000);
   if (!p) { check(false, `${app.name}: its page is reachable over DevTools`); return null; }
-  const id = await p.eval('({ ua: navigator.userAgent, w: window.innerWidth, url: location.href })', 10000);
+  const id = await p.eval(`({ ua: navigator.userAgent, w: window.innerWidth, url: location.href,
+      unsupported: /browser version isn.t supported|browser isn.t supported/i.test(document.body ? document.body.innerText : '') })`, 10000);
   console.log('  ' + JSON.stringify(id));
-  check(`${app.name}: mobile view (phone-width layout)`, id && id.w > 0 && id.w < 700, id && id.w);
+  if (id && id.unsupported) {
+    // Teams' own "browser not supported" page (old emulator WebView) has no mobile layout at all.
+    console.log(`  NOTE: ${app.name}: Microsoft shows its "browser not supported" page on this old emulator WebView - layout check skipped`);
+  } else {
+    check(`${app.name}: mobile view (phone-width layout)`, id && id.w > 0 && id.w < 700, id && id.w);
+  }
   check(`${app.name}: presents ${expectWindows ? 'a computer browser (Windows)' : 'a phone browser (Android)'}`,
     id && (expectWindows ? /Windows NT/.test(id.ua) : /Android/.test(id.ua) && !/Windows/.test(id.ua)), id && id.ua.slice(0, 70));
   const notif = sh('adb shell dumpsys notification --noredact');
