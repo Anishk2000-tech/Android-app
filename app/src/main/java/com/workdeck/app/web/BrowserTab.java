@@ -767,11 +767,20 @@ public final class BrowserTab {
      * Shared navigation policy for tabs and popups. Returns true if the navigation
      * was handled (blocked, routed to the other tab, or opened externally).
      */
+    /**
+     * Can a link for the account's other site be handed over? WorkDeck: when the account
+     * has that site. Single-app builds: always (the account's other app opens it, or -
+     * if that isn't installed - it opens here as a link tab).
+     */
+    private boolean canRouteTo(Site target) {
+        return account.siteEnabled(target) || com.workdeck.app.Edition.solo(mApp);
+    }
+
     public boolean handleNavigation(WebView view, String url, boolean userGesture, boolean isRedirect) {
         if (url == null) return false;
         if (UrlRouter.isHttp(url)) {
             Site target = UrlRouter.siteFor(url);
-            if (target != null && target != site && mHost != null && account.siteEnabled(target)
+            if (target != null && target != site && mHost != null && canRouteTo(target)
                     && (userGesture || !isRedirect)) {
                 mHost.switchToSite(this, target, url);
                 return true;
@@ -790,13 +799,13 @@ public final class BrowserTab {
             return false;
         }
         if (url.startsWith("msteams:")) {
-            if (site != Site.TEAMS && mHost != null && account.siteEnabled(Site.TEAMS)) {
+            if (site != Site.TEAMS && mHost != null && canRouteTo(Site.TEAMS)) {
                 mHost.switchToSite(this, Site.TEAMS, UrlRouter.msteamsToHttps(url));
             }
             return true; // never try to launch the Teams desktop/mobile app
         }
         if (url.startsWith("mailto:")) {
-            if (account.siteEnabled(Site.OUTLOOK) && mHost != null) {
+            if (canRouteTo(Site.OUTLOOK) && mHost != null) {
                 mHost.switchToSite(this, Site.OUTLOOK, UrlRouter.mailtoToOutlook(url, account.homeUrl(Site.OUTLOOK)));
             } else {
                 openExternal(url);
@@ -872,7 +881,7 @@ public final class BrowserTab {
             mDecided = true;
             if (mHost == null) return true;
             Site target = UrlRouter.siteFor(url);
-            if (target != null && target != site && account.siteEnabled(target)) {
+            if (target != null && target != site && canRouteTo(target)) {
                 mHost.closePopup(view);
                 mHost.switchToSite(BrowserTab.this, target, url);
                 return true;
