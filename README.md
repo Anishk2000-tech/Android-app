@@ -19,11 +19,13 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 ---
 
 ## Single-app editions: OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook (1.0.1)
-**1.0.1:** after a fresh sign-in, Teams could stop at Android's *"Webpage not available … net::ERR_FAILED"* page with no way out. The most likely cause is Teams' own background helper (its service worker) failing to deliver the page; Android shows its error page then without telling the app, and these apps have no menu to reload. Now the app recovers by itself:
-* it reloads;
-* if that fails too, it removes Teams' service worker and stored files (your sign-in stays) and loads Teams again;
-* if Teams' service worker comes back and breaks the page again, it turns service workers off for Teams in that app (notifications don't need them) and loads it again;
-* only if it still fails does it show its own *Can't load this page* screen, with **Retry**.
+**1.0.1:** after a fresh sign-in, Teams could stop at Android's *"Webpage not available … net::ERR_FAILED"* page with no way out. The cause appears to be Teams' own background helper (its service worker) failing to deliver the page - the device tests reproduced it on Android 14 and 15, also in WorkDeck after Android restarted the app. Android shows its error page then without telling the app, and Android's storage-clearing function leaves service workers in place. Now the app notices the error page itself (also when Android reports nothing) and recovers on its own:
+* it loads Teams again;
+* if that fails too, it removes Teams' service worker and its caches (it hands Android a replacement worker that deletes them and itself at the next update check) and Teams' stored files - your sign-in stays - and loads Teams again, twice if needed;
+* if it still fails, it turns service workers off for Teams in that app (notifications don't need them) and loads it again;
+* only then does it show its own *Can't load this page* screen, with **Retry**.
+
+A page that is still loading (slow network) is never taken for a failure. A successful load starts the steps over.
 
 The **Aa** panel also has a **Reload** button now. The same recovery is in the code shared with WorkDeck.
 
