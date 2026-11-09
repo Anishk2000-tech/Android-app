@@ -532,6 +532,7 @@ public final class BrowserTab {
             return;
         }
         mError = null;
+        mLoadAgainAt = SystemClock.elapsedRealtime(); // a failure after this is a new one
         String url = mWebView.getUrl();
         if (url == null || url.isEmpty() || url.startsWith("about:") || url.startsWith("data:")) {
             loadHome();
@@ -771,6 +772,16 @@ public final class BrowserTab {
     private int mHealAttempts;
     private long mHealWindowStart;
     private long mErrorReportedAt;
+    /** When the page was last loaded again (a recovery step, Reload or Retry). */
+    private long mLoadAgainAt;
+
+    /**
+     * The failure was already reported (by the error callback or the page check) and
+     * nothing has loaded the page again since: the same failure, already handled.
+     */
+    private boolean sameErrorAsReported() {
+        return mErrorReportedAt > mLoadAgainAt && SystemClock.elapsedRealtime() - mErrorReportedAt < 3000;
+    }
     private static final java.util.regex.Pattern CONNECTIVITY_ERROR = java.util.regex.Pattern.compile(
             "ERR_(INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|CONNECTION_[A-Z_]+|TIMED_OUT|"
                     + "NETWORK_[A-Z_]+|ADDRESS_[A-Z_]+|PROXY_[A-Z_]+|SSL_[A-Z_]+|CERT_[A-Z_]+|TUNNEL_[A-Z_]+)");
@@ -785,6 +796,7 @@ public final class BrowserTab {
      */
     private String mLastSiteUrl;
     private long mErrorCheckAt;
+    private int mLoadSeq;
     private static final java.util.regex.Pattern ERROR_TITLE = java.util.regex.Pattern.compile(
             "(?i)webpage not available|page not available|net::ERR_");
     private static final java.util.regex.Pattern NET_ERROR = java.util.regex.Pattern.compile("net::ERR_[A-Z_]+");
@@ -792,10 +804,12 @@ public final class BrowserTab {
     /** Checks soon whether the tab's page is the engine's error page (debounced). */
     private void scheduleErrorCheck(final WebView view, final String url, long delayMs) {
         if (view != mWebView || web != null) return;
+        final int seq = mLoadSeq;
         mMain.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (view != mWebView || mWebView == null) return;
+                // Only for the page being loaded now, and not while the error screen is up.
+                if (view != mWebView || mWebView == null || seq != mLoadSeq || mError != null) return;
                 if (SystemClock.elapsedRealtime() - mErrorCheckAt < 800) return;
                 mErrorCheckAt = SystemClock.elapsedRealtime();
                 checkErrorPage(view, url != null ? url : view.getUrl());
@@ -804,7 +818,7 @@ public final class BrowserTab {
     }
 
     private void checkErrorPage(final WebView view, final String url) {
-        if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return; // already handled
+        if (sameErrorAsReported()) return;
         // No page yet, or another site's real page (the sign-in page, a link): not an error page.
         if (url == null || url.startsWith("about:")) return;
         if (UrlRouter.isHttp(url) && UrlRouter.siteFor(url) != site) return;
@@ -827,13 +841,13 @@ public final class BrowserTab {
                         boolean isError = errorDoc || (noAnswer && (errorAddress || errorTitle));
                         if (isError || errorTitle || !UrlRouter.isHttp(url)) {
                             Log.i(TAG, key + ": page check " + url + " title=" + title + " -> "
-                                    + (v == null ? "null" : v.substring(0, Math.min(160, v.length()))));
+                                    + (v == null ? "null" : v.substring(0, Math.min(100, v.length()))));
                         }
                         if (!isError) return;
                         java.util.regex.Matcher m = NET_ERROR.matcher(v == null ? "" : v);
                         String desc = m.find() ? m.group() : "net::ERR_FAILED";
                         if (desc.contains("ERR_ABORTED")) return;
-                        if (SystemClock.elapsedRealtime() - mErrorReportedAt < 3000) return;
+                        if (sameErrorAsReported()) return;
                         mErrorReportedAt = SystemClock.elapsedRealtime();
                         Log.w(TAG, key + ": the page shows the engine's error page (" + desc + ")");
                         if (selfHeal(view, target, desc)) return;
@@ -885,7 +899,9 @@ public final class BrowserTab {
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    if (mWebView != null) mWebView.reload();
+                    if (mWebView == null) return;
+                    mLoadAgainAt = SystemClock.elapsedRealtime();
+                    mWebView.reload();
                 }
             }, 1500);
             return true;
@@ -900,7 +916,9 @@ public final class BrowserTab {
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    if (mWebView != null) mWebView.loadUrl(target);
+                    if (mWebView == null) return;
+                    mLoadAgainAt = SystemClock.elapsedRealtime();
+                    mWebView.loadUrl(target);
                 }
             }, 1500);
             return true;
@@ -910,7 +928,9 @@ public final class BrowserTab {
             mMain.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    if (mWebView != null) mWebView.loadUrl(target);
+                    if (mWebView == null) return;
+                    mLoadAgainAt = SystemClock.elapsedRealtime();
+                    mWebView.loadUrl(target);
                 }
             }, 1500);
             return true;
@@ -1113,6 +1133,7 @@ public final class BrowserTab {
             mLoadedAt = SystemClock.elapsedRealtime();
             mError = null;
             if (view == mWebView && web == null) {
+                mLoadSeq++;
                 if (UrlRouter.siteFor(url) == site) mLastSiteUrl = url;
                 if (!UrlRouter.isHttp(url) || UrlRouter.siteFor(url) == site) Log.i(TAG, key + ": page started " + url);
                 scheduleErrorCheck(view, url, 6000); // in case no "finished" comes

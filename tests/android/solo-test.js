@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sh = (c) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 90000 }); } catch (e) { return String(e.stdout || '') + String(e.stderr || ''); } };
 let failures = 0;
 function check(what, ok, detail) {
-  const line = (ok ? 'PASS  ' : 'FAIL  ') + '[solo] ' + what + (detail !== undefined ? '  -> ' + JSON.stringify(detail).slice(0, 300) : '');
+  const line = (ok ? 'PASS  ' : 'FAIL  ') + '[solo] ' + what + (detail !== undefined ? '  -> ' + JSON.stringify(detail).slice(0, ok ? 300 : 1200) : '');
   console.log(line);
   fs.appendFileSync(SUMMARY, line + '\n');
   if (!ok) failures++;
