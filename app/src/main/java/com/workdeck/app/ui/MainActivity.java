@@ -56,6 +56,7 @@ import com.workdeck.app.Site;
 import com.workdeck.app.UiState;
 import com.workdeck.app.WorkDeckApp;
 import com.workdeck.app.call.CallManager;
+import com.workdeck.app.Edition;
 import com.workdeck.app.notify.Notifier;
 import com.workdeck.app.service.KeepAliveService;
 import com.workdeck.app.web.BrowserTab;
@@ -146,6 +147,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     private final Map<Integer, Runnable> mPermissionCallbacks = new HashMap<>();
     private int mNextPermissionCode = 200;
     private boolean mInPip;
+    /** Single-app edition (one account, one app): only the page and a text-size control. */
+    private boolean mSolo;
+    private View mSoloDock;
+    private TextView mSoloRoute;
     private boolean mShownForCall;
     /** WorkDeck's window has input focus (no dialog/menu/notification shade over it). */
     private boolean mWindowFocused;
@@ -177,6 +182,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mPrefs = Prefs.get(this);
+        mSolo = Edition.solo(this);
         if (!mPrefs.setupDone()) {
             startActivity(new Intent(this, SetupActivity.class));
             finish();
@@ -267,7 +273,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     /** A bar on top when phone settings will delay or stop notifications, with a one-tap fix. */
     private void updateReliabilityBanner() {
         View bar = findViewById(R.id.reliability_banner);
-        if (bar == null) return;
+        if (bar == null || mSolo) return;
         final List<Reliability.Problem> problems = Reliability.check(this);
         if (problems.isEmpty() || System.currentTimeMillis() < mPrefs.reliabilitySnoozedUntil()) {
             bar.setVisibility(View.GONE);
@@ -541,6 +547,142 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 refreshUi();
             }
         });
+        if (mSolo) setupSoloControls();
+    }
+
+    // ------------------------------------------------------------------ single-app edition
+
+    /**
+     * Single-app edition: no bars, menus or account buttons - the page fills the screen.
+     * A small "Aa" button opens the text size / zoom row; during a call a button shows
+     * where the sound comes from (earpiece, speaker, Bluetooth) and switches it. Both
+     * can be dragged up and down the edge so they never cover the page's own buttons.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private void setupSoloControls() {
+        mBottomBar.setVisibility(View.GONE);
+        findViewById(R.id.reliability_banner).setVisibility(View.GONE);
+        mSoloDock = findViewById(R.id.solo_dock);
+        mSoloRoute = findViewById(R.id.solo_route);
+        mSoloDock.setVisibility(View.VISIBLE);
+        final View zoom = findViewById(R.id.solo_zoom);
+        zoom.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                mZoomBar.setVisibility(mZoomBar.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                refreshUi();
+            }
+        });
+        mSoloRoute.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                chooseRoute();
+            }
+        });
+        View.OnTouchListener drag = new View.OnTouchListener() {
+            private float mDownY, mStartY;
+            private boolean mDragging;
+
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent e) {
+                View root = findViewById(R.id.root);
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        mDownY = e.getRawY();
+                        mStartY = mSoloDock.getTranslationY();
+                        mDragging = false;
+                        return false;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        float dy = e.getRawY() - mDownY;
+                        if (!mDragging && Math.abs(dy) > Ui.dp(MainActivity.this, 8)) mDragging = true;
+                        if (mDragging) {
+                            float max = Math.max(0, root.getHeight() - mSoloDock.getHeight());
+                            mSoloDock.setTranslationY(Math.max(0, Math.min(max, mStartY + dy)));
+                            return true;
+                        }
+                        return false;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        if (mDragging) {
+                            mDragging = false;
+                            float h = Math.max(1, root.getHeight());
+                            mPrefs.raw().edit().putFloat("solo_dock_y", mSoloDock.getTranslationY() / h).apply();
+                            v.setPressed(false);
+                            return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+        };
+        zoom.setOnTouchListener(drag);
+        mSoloRoute.setOnTouchListener(drag);
+        final View root = findViewById(R.id.root);
+        root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                if (b - t == ob - ot && mSoloDock.getTag() != null) return;
+                mSoloDock.setTag(Boolean.TRUE);
+                float f = mPrefs.raw().getFloat("solo_dock_y", 0.42f);
+                float max = Math.max(0, (b - t) - mSoloDock.getHeight());
+                mSoloDock.setTranslationY(Math.max(0, Math.min(max, f * (b - t))));
+            }
+        });
+    }
+
+    private void refreshSoloControls() {
+        if (!mSolo || mSoloDock == null) return;
+        boolean hide = mInPip || mCustomView != null;
+        mSoloDock.setVisibility(hide ? View.GONE : View.VISIBLE);
+        boolean inCall = mCall != null && mCall.inCall();
+        mSoloRoute.setVisibility(inCall ? View.VISIBLE : View.GONE);
+        if (inCall) {
+            CallManager.Route r = mCall.route();
+            mSoloRoute.setText(routeShortLabel(r));
+            Drawable d = getDrawable(routeIcon(r));
+            if (d != null) {
+                d = d.mutate();
+                d.setTint(getColor(R.color.wd_primary));
+                int sz = Ui.dp(this, 20);
+                d.setBounds(0, 0, sz, sz);
+            }
+            mSoloRoute.setCompoundDrawablesRelative(d, null, null, null);
+        }
+    }
+
+    private String routeShortLabel(CallManager.Route r) {
+        if (r == null) return getString(R.string.route_auto);
+        switch (r) {
+            case EARPIECE: return getString(R.string.route_earpiece_short);
+            case BLUETOOTH: {
+                String n = mCall.bluetoothName();
+                return n != null ? n : getString(R.string.route_bluetooth_short);
+            }
+            case WIRED: return getString(R.string.route_wired_short);
+            default: return getString(R.string.route_speaker_short);
+        }
+    }
+
+    /**
+     * Single-app edition: a link for the account's other app (a Teams meeting in Outlook,
+     * an Outlook link in Teams) opens in that account's other single-app build if it's
+     * installed, otherwise right here as a link tab (same sign-in).
+     */
+    private void openInSibling(BrowserTab from, String url) {
+        String pkg = Edition.siblingPackage(this);
+        if (!pkg.isEmpty() && url != null) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        .setClassName(pkg, "com.workdeck.app.ui.MainActivity")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return;
+            } catch (Throwable t) {
+                android.util.Log.i("WorkDeck/Main", "the account's other app isn't installed: " + pkg);
+            }
+        }
+        if (from != null && url != null) openNewTab(from.account, url, from);
     }
 
     /** Edge-to-edge on Android 11+: pad content for system bars, cutouts and the keyboard. */
@@ -1209,11 +1351,19 @@ public final class MainActivity extends Activity implements TabHost, CallManager
             mDesktopWidth.setText(getString(R.string.desktop_width_value, mPrefs.desktopWidth()));
             mDesktopWidth.setVisibility(cur.isDesktop() ? View.VISIBLE : View.GONE);
         }
+        mPopupHeader.setVisibility(mInPip ? View.GONE : View.VISIBLE);
+        if (mSolo) {
+            mBottomBar.setVisibility(View.GONE);
+            mBtnShowBar.setVisibility(View.GONE);
+            mDesktopWidth.setVisibility(View.GONE);
+            if (mInPip) mZoomBar.setVisibility(View.GONE);
+            refreshSoloControls();
+            return;
+        }
         boolean barHidden = mPrefs.barHidden() || mInPip;
         mBottomBar.setVisibility(barHidden ? View.GONE : View.VISIBLE);
         if (barHidden) mZoomBar.setVisibility(View.GONE);
         mBtnShowBar.setVisibility(mPrefs.barHidden() && !mInPip ? View.VISIBLE : View.GONE);
-        mPopupHeader.setVisibility(mInPip ? View.GONE : View.VISIBLE);
     }
 
     private void toggleViewMode() {
@@ -1374,6 +1524,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (!UrlRouter.isHttp(url)) return;
         Site target = UrlRouter.siteFor(url);
         if (target != null && a.siteEnabled(target)) openIn(a, target, url);
+        else if (mSolo && !UrlRouter.isMicrosoft(url)) return; // only Microsoft links from other apps
         else openNewTab(a, url, currentTab());
     }
 
@@ -1414,6 +1565,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         updatePipParams(inCall);
         updatePresence();
+        refreshSoloControls();
     }
 
     private int routeIcon(CallManager.Route r) {
@@ -1521,8 +1673,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         }
         BrowserTab t = currentTab();
         if (t != null && t.isWeb() && !t.canGoBack()) {
-            // First page of a link tab: back to Teams/Outlook (the tab stays in the drop-up).
-            returnFromWebTab(mAccount, mOpenedFrom.get(t.key));
+            // First page of a link tab: back to Teams/Outlook (the tab stays in the drop-up;
+            // the single-app edition has no drop-up, so there the link tab is closed).
+            if (mSolo) closeWebTab(mAccount, t.web.id);
+            else returnFromWebTab(mAccount, mOpenedFrom.get(t.key));
             return;
         }
         if (t != null && t.canGoBack()) {
@@ -1760,6 +1914,10 @@ public final class MainActivity extends Activity implements TabHost, CallManager
 
     @Override
     public void switchToSite(BrowserTab from, Site site, String url) {
+        if (mSolo && !from.account.siteEnabled(site)) {
+            openInSibling(from, url);
+            return;
+        }
         openIn(from.account, site, url);
     }
 

@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Single-app editions of WorkDeck: one account, one app (e.g. "OMC" Teams), mobile view.
+  The same code as WorkDeck (app/src/main/java); this manifest only declares what a
+  single-app build has. Class names are fully qualified: the code's package stays
+  com.workdeck.app while each build has its own application id (see solo/build.gradle).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Calls: microphone, camera, audio routing (earpiece / speaker / Bluetooth headsets) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+
+    <!-- The same account's other app (OMC Teams <-> OMC Outlook) opens its links. -->
+    <queries>
+        <package android:name="com.workdeck.omc.teams" />
+        <package android:name="com.workdeck.omc.outlook" />
+        <package android:name="com.workdeck.craftww.teams" />
+        <package android:name="com.workdeck.craftww.outlook" />
+    </queries>
+
+    <application
+        android:name="com.workdeck.app.WorkDeckApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WorkDeck.Page"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name="com.workdeck.app.ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Teams builds: Teams meeting / chat links from other apps -->
+        <activity-alias
+            android:name="com.workdeck.app.ui.TeamsLinks"
+            android:enabled="@bool/edition_teams_links"
+            android:exported="true"
+            android:targetActivity="com.workdeck.app.ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="teams.microsoft.com" />
+                <data android:host="teams.cloud.microsoft" />
+                <data android:pathPrefix="/l/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="msteams" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Outlook builds: e-mail addresses (mailto:) and Outlook links -->
+        <activity-alias
+            android:name="com.workdeck.app.ui.OutlookLinks"
+            android:enabled="@bool/edition_outlook_links"
+            android:exported="true"
+            android:targetActivity="com.workdeck.app.ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="mailto" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="outlook.office.com" />
+                <data android:host="outlook.office365.com" />
+                <data android:host="outlook.cloud.microsoft" />
+                <data android:pathPrefix="/mail" />
+                <data android:pathPrefix="/calendar" />
+                <data android:pathPrefix="/owa" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity
+            android:name="com.workdeck.app.ui.SetupActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <service
+            android:name="com.workdeck.app.service.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone|camera"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's Microsoft Teams or Outlook web session connected so chat messages, mail and incoming calls arrive in real time." />
+        </service>
+
+        <receiver
+            android:name="com.workdeck.app.service.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.workdeck.app.service.Watchdog"
+            android:exported="false" />
+
+        <receiver
+            android:name="com.workdeck.app.notify.ActionReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

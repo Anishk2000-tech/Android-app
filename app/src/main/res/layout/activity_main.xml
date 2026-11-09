@@ -421,6 +421,48 @@
         android:background="#000000"
         android:visibility="gone" />
 
+    <!-- Single-app editions: the only controls on screen (draggable up/down the edge). -->
+    <LinearLayout
+        android:id="@+id/solo_dock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|top"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/solo_route"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/pill_bg"
+            android:contentDescription="@string/desc_call_audio"
+            android:drawablePadding="6dp"
+            android:elevation="4dp"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="14dp"
+            android:textColor="@color/wd_text"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/solo_zoom"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:alpha="0.55"
+            android:background="@drawable/pill_bg"
+            android:contentDescription="@string/desc_text_zoom"
+            android:elevation="4dp"
+            android:gravity="center"
+            android:text="Aa"
+            android:textColor="@color/wd_text"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <ImageButton
         android:id="@+id/btn_show_bar"
         android:layout_width="40dp"

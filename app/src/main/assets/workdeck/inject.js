@@ -718,6 +718,17 @@
       var origStop = t.stop;
       hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
     };
+    // Camera tracks: a video call starts on the loudspeaker, a voice call on the earpiece.
+    var trackVideo = function (t) {
+      if (!t || t.__wdVideo || t.kind !== 'video') return;
+      hidden(t, '__wdVideo', true);
+      call('videoDelta', 1);
+      var ended = false;
+      var end = function () { if (ended) return; ended = true; call('videoDelta', -1); };
+      try { t.addEventListener('ended', end); } catch (e) {}
+      var origStop = t.stop;
+      hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
+    };
     var reportId = function (t, id, label) {
       if (!t || !id || !t.getSettings) return;
       var orig = t.getSettings;
@@ -747,6 +758,7 @@
             if (isOurId(audioId || 'default')) reportId(t, aid || 'default', micLabel(aid, mediaInfo()));
           });
           if (videoId && isOurId(videoId)) stream.getVideoTracks().forEach(function (t) { reportId(t, videoId); });
+          stream.getVideoTracks().forEach(trackVideo);
         } catch (e) {}
         return stream;
       });
@@ -770,6 +782,64 @@
         try { navigator.mediaDevices.dispatchEvent(new Event('devicechange')); } catch (e) {}
       });
     }
+  }
+
+  // ------------------------------------------------------------------ call connections
+  // A Teams call is a peer connection that sends audio. Reporting it (not only the
+  // microphone) keeps the call "on" while Teams closes and re-opens the microphone (mute,
+  // switching devices), so the call's audio device isn't lost on the way; a connection
+  // that only receives (watching a live event) is not a call.
+  if (typeof window.RTCPeerConnection === 'function') {
+    var NativePC = window.RTCPeerConnection;
+    var sendsAudio = function (pc) {
+      try {
+        return pc.getTransceivers().some(function (t) {
+          var dir = String(t.currentDirection || t.direction || '');
+          return !t.stopped && t.receiver && t.receiver.track && t.receiver.track.kind === 'audio' && dir.indexOf('send') >= 0;
+        });
+      } catch (e) { return false; }
+    };
+    var watchPC = function (pc) {
+      var counted = false;
+      var update = function () {
+        var st = String(pc.connectionState || pc.iceConnectionState || '');
+        // 'disconnected' is usually a short network blip: the call goes on until failed/closed.
+        if (!counted && (st === 'connected' || st === 'completed') && sendsAudio(pc)) {
+          counted = true;
+          call('rtcDelta', 1);
+        } else if (counted && (st === 'failed' || st === 'closed')) {
+          counted = false;
+          call('rtcDelta', -1);
+        }
+      };
+      var later = function () { update(); setTimeout(update, 1500); };
+      try { pc.addEventListener('connectionstatechange', later); } catch (e) {}
+      try { pc.addEventListener('iceconnectionstatechange', later); } catch (e) {}
+      try { pc.addEventListener('track', later); } catch (e) {}
+      var origClose = pc.close;
+      if (typeof origClose === 'function') {
+        hidden(pc, 'close', function () {
+          var r = origClose.apply(this, arguments);
+          if (counted) { counted = false; call('rtcDelta', -1); }
+          return r;
+        });
+      }
+    };
+    var WDPC = function RTCPeerConnection(config, constraints) {
+      if (!(this instanceof WDPC)) return NativePC.call(this, config, constraints); // throws like the original
+      var pc = arguments.length > 1 ? new NativePC(config, constraints) : (arguments.length ? new NativePC(config) : new NativePC());
+      var proto = Object.getPrototypeOf(this);
+      if (proto !== NativePC.prototype) { try { Object.setPrototypeOf(pc, proto); } catch (e) {} } // subclasses
+      try { watchPC(pc); } catch (e) {}
+      return pc;
+    };
+    WDPC.prototype = NativePC.prototype;
+    Object.getOwnPropertyNames(NativePC).forEach(function (k) {
+      if (['length', 'name', 'prototype', 'arguments', 'caller'].indexOf(k) >= 0) return;
+      try { Object.defineProperty(WDPC, k, Object.getOwnPropertyDescriptor(NativePC, k)); } catch (e) {}
+    });
+    hidden(window, 'RTCPeerConnection', WDPC);
+    if (window.webkitRTCPeerConnection === NativePC) hidden(window, 'webkitRTCPeerConnection', WDPC);
   }
 
   // Speaker selection (setSinkId) -> Android audio route. Always succeeds, so a

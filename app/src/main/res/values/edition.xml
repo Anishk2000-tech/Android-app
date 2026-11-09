@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Which app this build is (see Edition.java). The single-app builds (solo/) override these. -->
+<resources>
+    <bool name="edition_solo">false</bool>
+    <string name="edition_account" translatable="false"></string>
+    <string name="edition_site" translatable="false"></string>
+    <bool name="edition_computer_identity">false</bool>
+    <string name="edition_sibling_package" translatable="false"></string>
+    <!-- Which link filters the launcher activity has (activity-aliases in the solo manifest). -->
+    <bool name="edition_teams_links">true</bool>
+    <bool name="edition_outlook_links">true</bool>
+</resources>

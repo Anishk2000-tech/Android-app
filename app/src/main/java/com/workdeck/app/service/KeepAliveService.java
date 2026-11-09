@@ -253,7 +253,10 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
             }
         } else {
             b = new Notification.Builder(this, Notifier.CH_SERVICE)
-                    .setContentTitle(getString(R.string.service_title))
+                    .setContentTitle(com.workdeck.app.Edition.solo(this)
+                            ? getString(R.string.solo_service_title, com.workdeck.app.Edition.account(this),
+                                    getString(com.workdeck.app.Edition.site(this).titleRes))
+                            : getString(R.string.service_title))
                     .setContentText(statusText())
                     .setShowWhen(false);
             PendingIntent stop = PendingIntent.getBroadcast(this, 2,

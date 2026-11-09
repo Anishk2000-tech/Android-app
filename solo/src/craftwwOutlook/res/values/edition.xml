@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="edition_sibling_package" translatable="false">com.workdeck.craftww.teams</string>
+    <bool name="edition_computer_identity">false</bool>
+</resources>

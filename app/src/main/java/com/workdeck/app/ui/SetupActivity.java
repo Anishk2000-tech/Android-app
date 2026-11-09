@@ -21,6 +21,7 @@ import android.widget.Toast;
 
 import com.workdeck.app.Account;
 import com.workdeck.app.Accounts;
+import com.workdeck.app.Edition;
 import com.workdeck.app.Prefs;
 import com.workdeck.app.R;
 import com.workdeck.app.Site;
@@ -61,7 +62,18 @@ public final class SetupActivity extends Activity {
     }
 
     private void build() {
-        LinearLayout c = Ui.page(this, getString(mFromMenu ? R.string.menu_setup : R.string.setup_title), mFromMenu);
+        final boolean solo = Edition.solo(this);
+        final boolean teams = !solo || Edition.site(this) == Site.TEAMS;
+        LinearLayout c;
+        if (solo) {
+            // Single-app build: the account and the app are fixed, only permissions remain.
+            String app = Edition.account(this) + " " + getString(Edition.site(this).titleRes);
+            c = Ui.page(this, app, mFromMenu);
+            Ui.para(c, getString(teams ? R.string.solo_setup_intro_teams : R.string.solo_setup_intro_outlook, app));
+            buildPermissions(c, true, teams, getString(R.string.solo_setup_start, app));
+            return;
+        }
+        c = Ui.page(this, getString(mFromMenu ? R.string.menu_setup : R.string.setup_title), mFromMenu);
         Ui.para(c, getString(R.string.setup_intro));
 
         // 1. account
@@ -114,6 +126,11 @@ public final class SetupActivity extends Activity {
         mTeams.setOnCheckedChangeListener(keepOne);
         mOutlook.setOnCheckedChangeListener(keepOne);
 
+        buildPermissions(c, false, true, getString(mFromMenu ? R.string.ok : R.string.setup_continue));
+    }
+
+    /** Permissions section (+ continue button); {@code calls}: microphone, camera, Bluetooth, call screen. */
+    private void buildPermissions(LinearLayout c, boolean solo, boolean calls, String continueLabel) {
         // 3. permissions
         Ui.heading(c, getString(R.string.setup_step_permissions));
         Ui.para(c, getString(R.string.setup_permissions_hint));
@@ -124,16 +141,18 @@ public final class SetupActivity extends Activity {
             }
         });
         LinearLayout perms = Ui.card(c);
-        mMic = Ui.permRow(perms, getString(R.string.perm_mic), getString(R.string.perm_mic_desc),
-                getString(R.string.btn_allow), request(Manifest.permission.RECORD_AUDIO));
-        mCamera = Ui.permRow(perms, getString(R.string.perm_camera), getString(R.string.perm_camera_desc),
-                getString(R.string.btn_allow), request(Manifest.permission.CAMERA));
+        if (calls) {
+            mMic = Ui.permRow(perms, getString(R.string.perm_mic), getString(R.string.perm_mic_desc),
+                    getString(R.string.btn_allow), request(Manifest.permission.RECORD_AUDIO));
+            mCamera = Ui.permRow(perms, getString(R.string.perm_camera), getString(R.string.perm_camera_desc),
+                    getString(R.string.btn_allow), request(Manifest.permission.CAMERA));
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             mNotif = Ui.permRow(perms, getString(R.string.perm_notifications),
                     getString(R.string.perm_notifications_desc), getString(R.string.btn_allow),
                     request(Manifest.permission.POST_NOTIFICATIONS));
         }
-        if (Build.VERSION.SDK_INT >= 31) {
+        if (calls && Build.VERSION.SDK_INT >= 31) {
             mBt = Ui.permRow(perms, getString(R.string.perm_bluetooth), getString(R.string.perm_bluetooth_desc),
                     getString(R.string.btn_allow), request(Manifest.permission.BLUETOOTH_CONNECT));
         }
@@ -144,7 +163,7 @@ public final class SetupActivity extends Activity {
                         requestBattery();
                     }
                 });
-        if (Build.VERSION.SDK_INT >= 34) {
+        if (calls && Build.VERSION.SDK_INT >= 34) {
             mFullScreen = Ui.permRow(perms, getString(R.string.perm_fullscreen),
                     getString(R.string.perm_fullscreen_desc), getString(R.string.btn_open), new View.OnClickListener() {
                         @Override
@@ -163,10 +182,12 @@ public final class SetupActivity extends Activity {
             }
         }).status.setVisibility(View.GONE);
 
-        Ui.heading(c, getString(R.string.setup_tips_title));
-        Ui.para(c, getString(R.string.setup_tips));
+        if (!solo) {
+            Ui.heading(c, getString(R.string.setup_tips_title));
+            Ui.para(c, getString(R.string.setup_tips));
+        }
 
-        Ui.primaryButton(c, getString(mFromMenu ? R.string.ok : R.string.setup_continue), new View.OnClickListener() {
+        Ui.primaryButton(c, continueLabel, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 finishSetup();
@@ -190,8 +211,8 @@ public final class SetupActivity extends Activity {
     }
 
     private void refresh() {
-        mMic.set(has(Manifest.permission.RECORD_AUDIO), false);
-        mCamera.set(has(Manifest.permission.CAMERA), true);
+        if (mMic != null) mMic.set(has(Manifest.permission.RECORD_AUDIO), false);
+        if (mCamera != null) mCamera.set(has(Manifest.permission.CAMERA), true);
         if (mNotif != null) mNotif.set(has(Manifest.permission.POST_NOTIFICATIONS), false);
         if (mBt != null) mBt.set(has(Manifest.permission.BLUETOOTH_CONNECT), true);
         mBattery.set(batteryIgnored(), false);
@@ -211,10 +232,11 @@ public final class SetupActivity extends Activity {
 
     private void allowEverything() {
         List<String> need = new ArrayList<>();
-        need.add(Manifest.permission.RECORD_AUDIO);
-        need.add(Manifest.permission.CAMERA);
+        boolean calls = mMic != null; // single-app Outlook: no calls, so no mic/camera/Bluetooth
+        if (calls) need.add(Manifest.permission.RECORD_AUDIO);
+        if (calls) need.add(Manifest.permission.CAMERA);
         if (Build.VERSION.SDK_INT >= 33) need.add(Manifest.permission.POST_NOTIFICATIONS);
-        if (Build.VERSION.SDK_INT >= 31) need.add(Manifest.permission.BLUETOOTH_CONNECT);
+        if (calls && Build.VERSION.SDK_INT >= 31) need.add(Manifest.permission.BLUETOOTH_CONNECT);
         List<String> missing = new ArrayList<>();
         for (String p : need) if (!has(p)) missing.add(p);
         if (missing.isEmpty()) {
@@ -320,6 +342,7 @@ public final class SetupActivity extends Activity {
     private void finishSetup() {
         TabManager tabs = TabManager.get(this);
         for (Account a : mTargets) {
+            if (mTeams == null) continue; // single-app build: nothing to choose
             a.setSiteEnabled(Site.TEAMS, mTeams.isChecked());
             a.setSiteEnabled(Site.OUTLOOK, mOutlook.isChecked());
             if (!mInitialAccount.equals(a.type)) {

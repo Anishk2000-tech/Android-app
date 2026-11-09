@@ -47,6 +47,11 @@ jobs:
           name: workdeck-apks
           path: app/build/outputs/apk/**/*.apk
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solo-apks
+          path: solo/build/outputs/apk/**/*.apk
+
   device-test:
     needs: build
     runs-on: ubuntu-latest
@@ -73,6 +78,11 @@ jobs:
           name: workdeck-apks
           path: apks
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: solo-apks
+          path: solo-apks
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -98,11 +108,11 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu ${{ matrix.gpu }} -no-boot-anim -no-snapshot-save -camera-back emulated -camera-front emulated
-          script: bash scripts/ci/emulator-test.sh "$(ls apks/debug/*.apk | head -1)" "$(ls release/*.apk 2>/dev/null | head -1)"
+          script: bash scripts/ci/emulator-test.sh "$(ls apks/debug/*.apk | head -1)" "$(ls release/*.apk 2>/dev/null | head -1)"; A=$?; bash scripts/ci/solo-test.sh solo-apks; B=$?; exit $((A | B))
 
       - name: Screenshots (thumbnails, decode with base64)
         if: always()
-        run: cat ci-out/*.thumb 2>/dev/null || true
+        run: cat ci-out/*.thumb ci-out/solo/*.thumb 2>/dev/null || true
 
       - name: Summary
         if: always()

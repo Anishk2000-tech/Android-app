@@ -317,4 +317,18 @@
     <string name="blocked_open_edge">Open in Edge</string>
     <string name="close">Close</string>
     <string name="view_mobile_computer_note">Phone layout – kept as a computer browser, because %1$s\'s company blocks phone browsers</string>
+
+    <!-- Single-app editions (e.g. "OMC" Teams) -->
+    <string name="solo_setup_intro_teams">%1$s: chats, calls and meetings with the phone\'s microphone, camera, earpiece, speaker or Bluetooth headset. Allow the permissions once.</string>
+    <string name="solo_setup_intro_outlook">%1$s: your mail and calendar, with notifications for new mail. Allow the permissions once.</string>
+    <string name="desc_text_zoom">Text size and zoom</string>
+    <string name="desc_call_audio">Call audio: tap to choose earpiece, speaker or Bluetooth</string>
+    <string name="call_audio_title">Call audio</string>
+    <string name="route_earpiece_short">Earpiece</string>
+    <string name="route_speaker_short">Speaker</string>
+    <string name="route_bluetooth_short">Bluetooth</string>
+    <string name="route_wired_short">Headset</string>
+    <string name="solo_setup_start">Start %1$s</string>
+    <string name="solo_service_title">%1$s %2$s is connected</string>
+    <string name="solo_open_sibling_missing">Install the %1$s %2$s app to open this there. Opening it here instead.</string>
 </resources>

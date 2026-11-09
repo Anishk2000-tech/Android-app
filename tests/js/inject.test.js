@@ -48,6 +48,8 @@ const BRIDGE_MOCK = `
     looking(t) { return window.__looking || '0'; },
     drawn(t) { return window.__drawn || '1'; },
     setMic(t, m) { this._rec('setMic', arguments); },
+    rtcDelta(t, d) { this._rec('rtcDelta', arguments); },
+    videoDelta(t, d) { this._rec('videoDelta', arguments); },
     composeFocus(t, st) { this._rec('composeFocus', arguments); },
     attachDone(t, method, n, seen) { this._rec('attachDone', arguments); },
     attachRead(t, id, off) {
@@ -341,6 +343,64 @@ test('getUserMedia mic tracks are counted up and down (call detection)', async (
   });
   assert.deepStrictEqual(r.after, ['1']);
   assert.deepStrictEqual(r.all, ['1', '1', '-1', '-1']);
+  await ctx.close();
+});
+
+test('a call connection that sends audio is reported while it lasts (not a receive-only one); camera tracks too', async (b, base) => {
+  const { ctx, page, errors } = await newPage(b, base, {});
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const deltas = (name) => window.__calls.filter((c) => c.name === name).map((c) => c.args[1]);
+    // Two connections in this page talk to each other (a call needs no server for this).
+    const connect = async (a, b) => {
+      a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+      b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+      const offer = await a.createOffer();
+      await a.setLocalDescription(offer);
+      await b.setRemoteDescription(offer);
+      const answer = await b.createAnswer();
+      await b.setLocalDescription(answer);
+      await a.setRemoteDescription(answer);
+      for (let i = 0; i < 50 && a.connectionState !== 'connected'; i++) await wait(100);
+      await wait(400);
+    };
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const caller = new RTCPeerConnection();
+    const callee = new RTCPeerConnection();
+    caller.addTrack(mic.getAudioTracks()[0], mic);
+    callee.addTransceiver('audio', { direction: 'recvonly' });
+    await connect(caller, callee);
+    const during = deltas('rtcDelta');
+    caller.close();
+    callee.close();
+    const after = deltas('rtcDelta');
+    // A receive-only connection (watching a live event) is not a call.
+    const viewer = new RTCPeerConnection();
+    const source = new RTCPeerConnection();
+    viewer.addTransceiver('audio', { direction: 'recvonly' });
+    source.addTrack(mic.getAudioTracks()[0], mic);
+    await connect(viewer, source);
+    const viewerCounted = deltas('rtcDelta').length - after.length;
+    viewer.close(); source.close();
+    mic.getTracks().forEach((t) => t.stop());
+    const cam = await navigator.mediaDevices.getUserMedia({ video: true });
+    const camOn = deltas('videoDelta');
+    cam.getTracks().forEach((t) => t.stop());
+    class MyPC extends RTCPeerConnection { hello() { return 'hi'; } }
+    const sub = new MyPC();
+    const ok = { inst: caller instanceof RTCPeerConnection, sub: sub.hello() === 'hi' && sub instanceof RTCPeerConnection,
+      cert: typeof RTCPeerConnection.generateCertificate === 'function', name: RTCPeerConnection.name };
+    sub.close();
+    return { during, after, viewerCounted, camOn, camAll: deltas('videoDelta'), ok };
+  });
+  assert.deepStrictEqual(r.during, ['1'], 'a connected call that sends audio is reported');
+  assert.deepStrictEqual(r.after, ['1', '-1'], 'and its end');
+  // Both ends live in this page: only the end that sends audio counts, not the receive-only one.
+  assert.strictEqual(r.viewerCounted, 1, 'a receive-only connection (watching a live event) is not a call');
+  assert.deepStrictEqual(r.camOn, ['1']);
+  assert.deepStrictEqual(r.camAll, ['1', '-1'], 'camera on / off');
+  assert.deepStrictEqual(r.ok, { inst: true, sub: true, cert: true, name: 'RTCPeerConnection' });
+  assert.deepStrictEqual(errors, []);
   await ctx.close();
 });
 

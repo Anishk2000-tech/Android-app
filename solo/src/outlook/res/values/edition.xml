@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="edition_solo">true</bool>
+    <string name="edition_site" translatable="false">outlook</string>
+    <bool name="edition_teams_links">false</bool>
+    <bool name="edition_outlook_links">true</bool>
+    <!-- Launcher icon: the word OUTLOOK on this colour (drawable/ic_launcher_foreground.xml). -->
+    <color name="launcher_bg">#0F6CBD</color>
+</resources>

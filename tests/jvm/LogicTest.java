@@ -1,4 +1,6 @@
 import com.workdeck.app.Site;
+import com.workdeck.app.call.CallManager;
+import com.workdeck.app.call.RoutePolicy;
 import com.workdeck.app.notify.CallHeuristics;
 import com.workdeck.app.web.UrlRouter;
 
@@ -90,6 +92,37 @@ public final class LogicTest {
         check(CallHeuristics.looksLikeIncomingCall("Dave", "Teams call", true), "requireInteraction + call is a call");
         check(!CallHeuristics.looksLikeIncomingCall("Dave", "Can you call me later?", false), "chat mentioning call is not a call");
         check(!CallHeuristics.looksLikeIncomingCall("Erin", "Lunch?", true), "requireInteraction alone is not a call");
+
+        // Call audio: where a call's sound goes (RoutePolicy)
+        {
+            java.util.List<CallManager.Route> phone = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE);
+            java.util.List<CallManager.Route> withBt = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE, CallManager.Route.BLUETOOTH);
+            java.util.List<CallManager.Route> withWired = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.WIRED);
+            java.util.List<CallManager.Route> noEarpiece = java.util.Arrays.asList(CallManager.Route.SPEAKER);
+            eq(RoutePolicy.auto(phone, false), CallManager.Route.EARPIECE, "voice call: earpiece");
+            eq(RoutePolicy.auto(phone, true), CallManager.Route.SPEAKER, "video call: loudspeaker");
+            eq(RoutePolicy.auto(withBt, false), CallManager.Route.BLUETOOTH, "Bluetooth headset connected: Bluetooth");
+            eq(RoutePolicy.auto(withBt, true), CallManager.Route.BLUETOOTH, "video call with Bluetooth headset: Bluetooth");
+            eq(RoutePolicy.auto(withWired, false), CallManager.Route.WIRED, "wired headset: headset");
+            eq(RoutePolicy.auto(noEarpiece, false), CallManager.Route.SPEAKER, "no earpiece (tablet): loudspeaker");
+            eq(RoutePolicy.onDeviceAdded(CallManager.Route.EARPIECE, phone, withBt), CallManager.Route.BLUETOOTH, "headset connects mid-call: switch to it");
+            eq(RoutePolicy.onDeviceAdded(CallManager.Route.SPEAKER, withBt, withBt), CallManager.Route.SPEAKER, "nothing new connected: keep the user's speaker");
+            eq(RoutePolicy.onDeviceRemoved(CallManager.Route.BLUETOOTH, phone, false), CallManager.Route.EARPIECE, "headset gone in a voice call: earpiece");
+            eq(RoutePolicy.onDeviceRemoved(CallManager.Route.BLUETOOTH, phone, true), CallManager.Route.SPEAKER, "headset gone in a video call: loudspeaker");
+            eq(RoutePolicy.onDeviceRemoved(CallManager.Route.SPEAKER, phone, false), CallManager.Route.SPEAKER, "another device gone: keep the speaker");
+            eq(RoutePolicy.onVideoStarted(CallManager.Route.EARPIECE, false), CallManager.Route.SPEAKER, "camera on: earpiece -> loudspeaker");
+            eq(RoutePolicy.onVideoStarted(CallManager.Route.EARPIECE, true), CallManager.Route.EARPIECE, "camera on, but the user picked the earpiece: stays");
+            eq(RoutePolicy.onVideoStarted(CallManager.Route.BLUETOOTH, false), CallManager.Route.BLUETOOTH, "camera on with a headset: stays on the headset");
+            // Teams re-applies its saved microphone/speaker at every call start: not the user.
+            eq(RoutePolicy.fromPage(CallManager.Route.SPEAKER, null, true, withBt), null, "page's saved speaker at call start: ignored");
+            eq(RoutePolicy.fromPage(CallManager.Route.EARPIECE, CallManager.Route.EARPIECE, false, withBt), null, "page repeats the same device: ignored");
+            eq(RoutePolicy.fromPage(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE, false, withBt), CallManager.Route.SPEAKER, "user switches device in Teams mid-call: applied");
+            eq(RoutePolicy.fromPage(CallManager.Route.BLUETOOTH, CallManager.Route.EARPIECE, false, phone), null, "page asks for a headset that isn't there: ignored");
+            eq(RoutePolicy.micToRoute("bluetooth", withBt, false), CallManager.Route.BLUETOOTH, "Bluetooth microphone = Bluetooth headset");
+            eq(RoutePolicy.micToRoute("phone", withBt, false), CallManager.Route.EARPIECE, "phone microphone in a voice call = earpiece");
+            eq(RoutePolicy.micToRoute("phone", withBt, true), CallManager.Route.SPEAKER, "phone microphone in a video call = loudspeaker");
+            eq(RoutePolicy.micToRoute("default", withBt, false), null, "'Automatic' microphone: no device change");
+        }
 
         System.out.println(failures == 0 ? "\nall logic checks passed" : "\n" + failures + " FAILED");
         System.exit(failures == 0 ? 0 : 1);

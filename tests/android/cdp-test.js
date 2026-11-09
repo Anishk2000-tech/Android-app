@@ -272,9 +272,15 @@ async function connectAll() {
   // Pick a speaker the phone actually has (emulators often have no earpiece).
   const offered = dl.filter((d) => /^audiooutput:/.test(d)).join(',');
   const hasEarpiece = /Phone earpiece/.test(offered);
-  const sink = await teams.eval(`(async () => { const a = new Audio(); await a.setSinkId('wd-route-earpiece'); return a.sinkId; })()`);
+  // Teams first re-applies the speaker it saved last time (not the user: ignored), then
+  // the user switches to the earpiece in Teams' device settings (applied).
+  const sink = await teams.eval(`(async () => { const a = new Audio(); await a.setSinkId('wd-route-speaker');
+      await new Promise((r) => setTimeout(r, 800)); await a.setSinkId('wd-route-earpiece'); return a.sinkId; })()`);
   await sleep(6000); // long enough for WorkDeck's route checker to have run
-  const routeLog = sh('adb logcat -d -s WorkDeck/Call').split('\n').filter((l) => /route[= ]/.test(l)).pop() || '';
+  const callLog = sh('adb logcat -d -s WorkDeck/Call');
+  check(/page speaker SPEAKER \((unchanged \/ page preference, ignored|saved preference, not applied)\)/.test(callLog), 'Teams re-applying its saved speaker at call start does not move the call audio',
+    (callLog.match(/page speaker[^\n]*/) || [''])[0]);
+  const routeLog = callLog.split('\n').filter((l) => /route[= ]/.test(l)).pop() || '';
   if (hasEarpiece) {
     check(sink === 'wd-route-earpiece' && /route=EARPIECE/.test(routeLog), 'choosing "Phone earpiece" in Teams switches Android call audio (and it stays there)', [sink, routeLog.trim().slice(-45)]);
   } else {

@@ -153,6 +153,32 @@ final class JsBridge {
         });
     }
 
+    /** A call connection (RTCPeerConnection sending audio) came up (+1) or ended (-1). */
+    @JavascriptInterface
+    public void rtcDelta(String token, String delta) {
+        if (!ok(token)) return;
+        final int d = parseInt(delta, 0);
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                CallManager.get(mApp).onPageRtcDelta(mTab.key, d);
+            }
+        });
+    }
+
+    /** The page started (+1) or stopped (-1) a camera track. */
+    @JavascriptInterface
+    public void videoDelta(String token, String delta) {
+        if (!ok(token)) return;
+        final int d = parseInt(delta, 0);
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                CallManager.get(mApp).onPageVideoDelta(mTab.key, d);
+            }
+        });
+    }
+
     @JavascriptInterface
     public void callSignal(String token, final String type, final String detail) {
         if (!ok(token)) return;
@@ -190,7 +216,7 @@ final class JsBridge {
             @Override
             public void run() {
                 try {
-                    CallManager.get(mApp).setRouteByUser(CallManager.Route.valueOf(route));
+                    CallManager.get(mApp).setRouteFromPage(CallManager.Route.valueOf(route));
                 } catch (Throwable t) {
                     Log.w(TAG, "bad route " + route, t);
                 }
@@ -252,7 +278,7 @@ final class JsBridge {
         mMain.post(new Runnable() {
             @Override
             public void run() {
-                CallManager.get(mApp).setMicByUser(mic);
+                CallManager.get(mApp).setMicFromPage(mic);
             }
         });
     }

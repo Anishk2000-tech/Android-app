@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Single-app editions of WorkDeck: one account, one app, mobile view - four separate apps:
+//   OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook.
+// Same code, assets and resources as WorkDeck (../app); this module only adds its own
+// manifest (solo/src/main/AndroidManifest.xml) and per-app resources (name, icon, account).
+// Signing works as for :app (keystore.properties or WORKDECK_* environment variables).
+def ksProps = new Properties()
+def ksFile = rootProject.file('keystore.properties')
+if (ksFile.exists()) ksFile.withInputStream { ksProps.load(it) }
+def ksPath = ksProps.getProperty('storeFile') ?: System.getenv('WORKDECK_KEYSTORE')
+def ksPass = ksProps.getProperty('storePassword') ?: System.getenv('WORKDECK_KS_PASS')
+def ksAlias = ksProps.getProperty('keyAlias') ?: (System.getenv('WORKDECK_KEY_ALIAS') ?: 'workdeck')
+
+android {
+    namespace 'com.workdeck.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.workdeck"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    flavorDimensions = ['account', 'app']
+    productFlavors {
+        omc { dimension 'account'; applicationIdSuffix '.omc' }
+        craftww { dimension 'account'; applicationIdSuffix '.craftww' }
+        teams { dimension 'app'; applicationIdSuffix '.teams' }
+        outlook { dimension 'app'; applicationIdSuffix '.outlook' }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = ['../app/src/main/java']
+            res.srcDirs = ['../app/src/main/res']
+            assets.srcDirs = ['../app/src/main/assets']
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (ksPath && ksPass) {
+                storeFile file(ksPath)
+                storePassword ksPass
+                keyAlias ksAlias
+                keyPassword ksPass
+                storeType 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig = (ksPath && ksPass) ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    buildFeatures {
+        buildConfig false
+    }
+}

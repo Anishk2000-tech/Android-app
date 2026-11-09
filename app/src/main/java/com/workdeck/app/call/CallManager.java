@@ -27,18 +27,27 @@ import java.util.Map;
 /**
  * Tracks whether a Teams call is active and controls where call audio goes.
  *
- * A call is "active" while the app is recording from the microphone. Start is
- * signalled early by the page (getUserMedia hook) or by the WebView permission
- * grant, then confirmed/ended by polling Android's active recording list.
+ * A call is active while the page has a live call connection that sends audio (an
+ * RTCPeerConnection, reported by the page script) or records from the microphone. The
+ * connection keeps the call "on" when Teams closes and re-opens the microphone (mute,
+ * device change), so the chosen device isn't lost on the way.
  *
- * Routing: WorkDeck is the single owner of the call's audio device. The browser
- * engine also picks a device whenever it (re)opens audio, and headsets come and go,
- * so the chosen route is verified continuously and re-applied when something else
- * changed it (within limits, so it never fights the user's own system controls).
+ * Routing - see {@link RoutePolicy}: headset first, else earpiece for voice and speaker
+ * for video calls; the user's choice during the call wins. WorkDeck is the owner of the
+ * call's audio device. The browser engine also sets one whenever it opens the microphone
+ * (always a headset or else the LOUDSPEAKER) and when a headset (dis)connects, but it
+ * never watches the device afterwards: so whenever the device changes away from the one
+ * chosen here, it is put back at once (within ~60 ms, before the user hears the wrong one).
  */
 public final class CallManager {
     private static final String TAG = "WorkDeck/Call";
     private static final long POLL_MS = 2000;
+    /** How fast a device change made by someone else (the engine) is undone. */
+    private static final long REASSERT_DELAY_MS = 60;
+    /** Re-assert at most this often per minute (never fight the user's system controls forever). */
+    private static final int REASSERT_MAX_PER_MIN = 40;
+    /** Page device requests this old are not part of the call that is starting. */
+    private static final long PAGE_REQUEST_FRESH_MS = 30000;
     private static CallManager sInstance;
 
     public enum Route { SPEAKER, EARPIECE, BLUETOOTH, WIRED }
@@ -52,6 +61,8 @@ public final class CallManager {
     private final PowerManager mPower;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final Map<String, Integer> mPageMic = new HashMap<>();
+    private final Map<String, Integer> mPageRtc = new HashMap<>();
+    private final Map<String, Integer> mPageVideo = new HashMap<>();
     private final List<Listener> mListeners = new ArrayList<>();
 
     private boolean mInCall;
@@ -59,6 +70,7 @@ public final class CallManager {
     private Route mRoute;
     private boolean mUserPicked;
     private Route mPendingRoute;
+    private boolean mVideo;
     private boolean mWeSetMode;
     private boolean mPolling;
     private int mEmptyPolls;
@@ -70,6 +82,11 @@ public final class CallManager {
     private int mReassertCount;
     private int mBtRetries;
     private int mScoAttempts;
+    private List<Route> mLastAvailable = new ArrayList<>();
+    /** The page's last microphone / speaker request (null: none in this call yet). */
+    private Route mPageMicReq, mPageSinkReq;
+    private long mPageMicReqAt, mPageSinkReqAt;
+    private boolean mPageMicSeen, mPageSinkSeen;
 
     public static synchronized CallManager get(Context c) {
         if (sInstance == null) sInstance = new CallManager(c.getApplicationContext());
@@ -83,7 +100,10 @@ public final class CallManager {
         mAudio.registerAudioRecordingCallback(new AudioManager.AudioRecordingCallback() {
             @Override
             public void onRecordingConfigChanged(List<AudioRecordingConfiguration> configs) {
-                pollNow();
+                // The engine (re)opened or closed the microphone - and with it, on opening,
+                // switched the call device. Re-evaluate and re-assert right away.
+                pollSoon(50);
+                if (mInCall) verifySoon();
             }
         }, mMain);
         if (Build.VERSION.SDK_INT >= 31) {
@@ -92,10 +112,7 @@ public final class CallManager {
                         new AudioManager.OnCommunicationDeviceChangedListener() {
                             @Override
                             public void onCommunicationDeviceChanged(AudioDeviceInfo device) {
-                                if (mInCall) {
-                                    mMain.removeCallbacks(mVerifyOnce);
-                                    mMain.postDelayed(mVerifyOnce, 400);
-                                }
+                                if (mInCall) verifySoon();
                             }
                         });
             } catch (Throwable t) {
@@ -124,28 +141,60 @@ public final class CallManager {
                 onDevicesChanged(false);
             }
         }, mMain);
+        mLastAvailable = availableRoutes();
     }
 
-    // ------------------------------------------------------------------ signals
+    // ------------------------------------------------------------------ signals from the page
 
     public void onMicPossiblyStarted() {
         mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
         prepareCallAudio();
         startPolling();
-        pollNow();
+        pollSoon(50);
     }
 
     /** A tab (account|site key) opened (+1) or closed (-1) a microphone track. */
     public void onPageMicDelta(String tabKey, int delta) {
-        Integer cur = mPageMic.get(tabKey);
-        int n = Math.max(0, (cur == null ? 0 : cur) + delta);
-        mPageMic.put(tabKey, n);
+        bump(mPageMic, tabKey, delta);
         if (delta > 0) {
             mSuspectUntil = SystemClock.elapsedRealtime() + 20000;
             prepareCallAudio();
         }
         startPolling();
-        pollNow();
+        pollSoon(50);
+    }
+
+    /** A tab's call connection (RTCPeerConnection sending audio) came up (+1) or ended (-1). */
+    public void onPageRtcDelta(String tabKey, int delta) {
+        bump(mPageRtc, tabKey, delta);
+        Log.i(TAG, "call connections " + total(mPageRtc));
+        startPolling();
+        pollSoon(50);
+    }
+
+    /** A tab started (+1) or stopped (-1) a camera track. */
+    public void onPageVideoDelta(String tabKey, int delta) {
+        boolean was = mVideo;
+        bump(mPageVideo, tabKey, delta);
+        mVideo = total(mPageVideo) > 0;
+        if (mInCall && mVideo && !was) {
+            Route next = RoutePolicy.onVideoStarted(mRoute, mUserPicked);
+            if (next != mRoute) {
+                Log.i(TAG, "camera on: video call, loudspeaker");
+                applyRoute(next);
+            }
+        }
+    }
+
+    private static void bump(Map<String, Integer> m, String key, int delta) {
+        Integer cur = m.get(key);
+        m.put(key, Math.max(0, (cur == null ? 0 : cur) + delta));
+    }
+
+    private static int total(Map<String, Integer> m) {
+        int n = 0;
+        for (Integer v : m.values()) n += v == null ? 0 : v;
+        return n;
     }
 
     /**
@@ -165,15 +214,13 @@ public final class CallManager {
         }
     }
 
+    /** The tab's page was (re)loaded: its microphone, connections and camera are gone. */
     public void resetPageMic(String tabKey) {
         mPageMic.put(tabKey, 0);
-        if (mInCall) pollNow();
-    }
-
-    private int pageMicTotal() {
-        int n = 0;
-        for (Integer v : mPageMic.values()) n += v == null ? 0 : v;
-        return n;
+        mPageRtc.put(tabKey, 0);
+        mPageVideo.put(tabKey, 0);
+        mVideo = total(mPageVideo) > 0;
+        if (mInCall) pollSoon(50);
     }
 
     private boolean recording() {
@@ -190,9 +237,9 @@ public final class CallManager {
         mMain.postDelayed(mPoll, POLL_MS);
     }
 
-    private void pollNow() {
+    private void pollSoon(long delay) {
         mMain.removeCallbacks(mPollOnce);
-        mMain.postDelayed(mPollOnce, 300);
+        mMain.postDelayed(mPollOnce, delay);
     }
 
     private final Runnable mPollOnce = new Runnable() {
@@ -206,7 +253,8 @@ public final class CallManager {
         @Override
         public void run() {
             evaluate();
-            boolean keep = mInCall || pageMicTotal() > 0 || SystemClock.elapsedRealtime() < mSuspectUntil;
+            boolean keep = mInCall || total(mPageMic) > 0 || total(mPageRtc) > 0
+                    || SystemClock.elapsedRealtime() < mSuspectUntil;
             if (keep) {
                 mMain.postDelayed(this, POLL_MS);
             } else {
@@ -219,18 +267,19 @@ public final class CallManager {
 
     private void evaluate() {
         boolean rec = recording();
-        int page = pageMicTotal();
+        int mic = total(mPageMic);
+        int rtc = total(mPageRtc);
         if (!mInCall) {
-            if (rec && (page > 0 || SystemClock.elapsedRealtime() < mSuspectUntil)) setInCall(true);
+            if (rtc > 0 || (rec && (mic > 0 || SystemClock.elapsedRealtime() < mSuspectUntil))) setInCall(true);
             return;
         }
-        if (rec) {
+        if (rtc > 0 || rec) {
             mEmptyPolls = 0;
             return;
         }
         mEmptyPolls++;
         // If the page still reports a live mic track (e.g. muted), wait a bit longer.
-        if (mEmptyPolls >= (page > 0 ? 6 : 2)) setInCall(false);
+        if (mEmptyPolls >= (mic > 0 ? 6 : 2)) setInCall(false);
     }
 
     // ------------------------------------------------------------------ state
@@ -263,26 +312,35 @@ public final class CallManager {
         if (mInCall == inCall) return;
         mInCall = inCall;
         mEmptyPolls = 0;
-        Log.i(TAG, "inCall=" + inCall);
         if (inCall) {
             mCallStartedWall = System.currentTimeMillis();
+            mVideo = total(mPageVideo) > 0;
             acquireCpu();
             requestFocus();
-            final Route pending = mPendingRoute != null && availableRoutes().contains(mPendingRoute) ? mPendingRoute : null;
+            List<Route> avail = availableRoutes();
+            mLastAvailable = avail;
+            final Route pending = mPendingRoute != null && avail.contains(mPendingRoute) ? mPendingRoute : null;
             mUserPicked = pending != null;
-            mRoute = pending != null ? pending : pickAutoRoute();
+            mRoute = pending != null ? pending : RoutePolicy.auto(avail, mVideo || voiceOnSpeaker());
+            // Device requests the page made while the call was starting are its saved
+            // preferences, not the user: they count as "seen" for this call.
+            long now = SystemClock.elapsedRealtime();
+            mPageMicSeen = mPageMicReq != null && now - mPageMicReqAt < PAGE_REQUEST_FRESH_MS;
+            mPageSinkSeen = mPageSinkReq != null && now - mPageSinkReqAt < PAGE_REQUEST_FRESH_MS;
+            if (!mPageMicSeen) mPageMicReq = null;
+            if (!mPageSinkSeen) mPageSinkReq = null;
             mReassertCount = 0;
             mBtRetries = 0;
             mScoAttempts = 0;
-            mReassertWindowStart = SystemClock.elapsedRealtime();
-            // Apply now, and again once the browser engine has finished setting up its own
-            // audio (it picks a device when it opens the call's audio streams).
+            mReassertWindowStart = now;
+            Log.i(TAG, "inCall=true (" + (mVideo ? "video" : "voice") + ", devices " + avail + ")");
             applyRoute(mRoute);
             mMain.postDelayed(mReapply, 900);
             mMain.postDelayed(mReapply, 2500);
             mMain.removeCallbacks(mVerifyLoop);
-            mMain.postDelayed(mVerifyLoop, 4000);
+            mMain.postDelayed(mVerifyLoop, 2000);
         } else {
+            Log.i(TAG, "inCall=false");
             mMain.removeCallbacks(mReapply);
             mMain.removeCallbacks(mVerifyLoop);
             mMain.removeCallbacks(mVerifyOnce);
@@ -292,8 +350,16 @@ public final class CallManager {
             releaseLocks();
             mRoute = null;
             mPendingRoute = null;
+            mPageMicReq = mPageSinkReq = null;
+            mPageMicSeen = mPageSinkSeen = false;
         }
         dispatch();
+    }
+
+    /** WorkDeck's setting "Phone calls start on: speaker" (only when set explicitly). */
+    private boolean voiceOnSpeaker() {
+        Prefs p = Prefs.get(mApp);
+        return p.raw().contains("default_route") && Prefs.ROUTE_SPEAKER.equals(p.defaultRoute());
     }
 
     // ------------------------------------------------------------------ routing
@@ -303,13 +369,16 @@ public final class CallManager {
         boolean earpiece = false;
         boolean bt = false;
         boolean wired = false;
-        AudioDeviceInfo[] devices = mAudio.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
-        for (AudioDeviceInfo d : devices) {
-            int t = d.getType();
-            if (t == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) earpiece = true;
-            else if (t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || isBle(t)) bt = true;
-            else if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET || t == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
-                    || t == AudioDeviceInfo.TYPE_USB_HEADSET) wired = true;
+        try {
+            AudioDeviceInfo[] devices = mAudio.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+            for (AudioDeviceInfo d : devices) {
+                int t = d.getType();
+                if (t == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) earpiece = true;
+                else if (t == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || isBle(t)) bt = true;
+                else if (t == AudioDeviceInfo.TYPE_WIRED_HEADSET || t == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+                        || t == AudioDeviceInfo.TYPE_USB_HEADSET) wired = true;
+            }
+        } catch (Throwable ignored) {
         }
         out.add(Route.SPEAKER);
         if (earpiece && !wired) out.add(Route.EARPIECE);
@@ -338,17 +407,7 @@ public final class CallManager {
                 || type == AudioDeviceInfo.TYPE_BLE_SPEAKER);
     }
 
-    private Route pickAutoRoute() {
-        List<Route> avail = availableRoutes();
-        if (avail.contains(Route.BLUETOOTH)) return Route.BLUETOOTH;
-        if (avail.contains(Route.WIRED)) return Route.WIRED;
-        if (Prefs.ROUTE_EARPIECE.equals(Prefs.get(mApp).defaultRoute()) && avail.contains(Route.EARPIECE)) {
-            return Route.EARPIECE;
-        }
-        return Route.SPEAKER;
-    }
-
-    /** Called from the UI / notification buttons / Teams' speaker picker. */
+    /** Called from WorkDeck's own controls (call-audio button, notification buttons). */
     public void setRouteByUser(Route r) {
         if (r == null) return;
         if (!mInCall) {
@@ -358,35 +417,52 @@ public final class CallManager {
             Log.i(TAG, "route " + r + " saved for the next call");
             return;
         }
+        Log.i(TAG, "user picked " + r);
         mUserPicked = true;
         mBtRetries = 0;
         mReassertCount = 0;
         applyRoute(r);
     }
 
-    /**
-     * Teams picked a microphone. Android uses the microphone of the call's audio device,
-     * so a Bluetooth/headset mic means routing the call there; the phone mic means
-     * leaving any headset for the phone's own earpiece/speaker.
-     */
-    public void setMicByUser(String mic) {
-        if (mic == null) return;
-        Route target = null;
-        Route current = mInCall ? mRoute : mPendingRoute;
-        if ("bluetooth".equals(mic)) target = Route.BLUETOOTH;
-        else if ("wired".equals(mic)) target = Route.WIRED;
-        else if ("phone".equals(mic) && (current == Route.BLUETOOTH || current == Route.WIRED
-                || (current == null && pickAutoRoute() != phoneRoute()))) {
-            target = phoneRoute();
+    /** Teams chose a speaker (setSinkId). Only a change during the call is the user's choice. */
+    public void setRouteFromPage(Route r) {
+        long now = SystemClock.elapsedRealtime();
+        if (!mInCall) {
+            mPageSinkReq = r;
+            mPageSinkReqAt = now;
+            Log.i(TAG, "page speaker " + r + " (saved preference, not applied)");
+            return;
         }
-        Log.i(TAG, "microphone " + mic + " -> route " + target);
-        if (target != null) setRouteByUser(target);
+        Route pick = RoutePolicy.fromPage(r, mPageSinkReq, !mPageSinkSeen, availableRoutes());
+        Log.i(TAG, "page speaker " + r + (pick != null ? " -> route " + pick : " (unchanged / page preference, ignored)"));
+        mPageSinkReq = r;
+        mPageSinkReqAt = now;
+        mPageSinkSeen = true;
+        if (pick != null) setRouteByUser(pick);
     }
 
-    /** The phone's own speaker or earpiece, as set in Settings. */
-    private Route phoneRoute() {
-        return Prefs.ROUTE_EARPIECE.equals(Prefs.get(mApp).defaultRoute()) && availableRoutes().contains(Route.EARPIECE)
-                ? Route.EARPIECE : Route.SPEAKER;
+    /**
+     * Teams chose a microphone. Android uses the microphone of the call's audio device,
+     * so a Bluetooth/headset mic means routing the call there; the phone mic means
+     * leaving any headset for the phone's own earpiece/speaker. Only a change during the
+     * call is the user's choice (the first request is Teams re-applying its saved mic).
+     */
+    public void setMicFromPage(String mic) {
+        Route r = RoutePolicy.micToRoute(mic, availableRoutes(), mVideo || voiceOnSpeaker());
+        if (r == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (!mInCall) {
+            mPageMicReq = r;
+            mPageMicReqAt = now;
+            Log.i(TAG, "page microphone " + mic + " (saved preference, not applied)");
+            return;
+        }
+        Route pick = RoutePolicy.fromPage(r, mPageMicReq, !mPageMicSeen, availableRoutes());
+        Log.i(TAG, "page microphone " + mic + (pick != null ? " -> route " + pick : " (unchanged / page preference, ignored)"));
+        mPageMicReq = r;
+        mPageMicReqAt = now;
+        mPageMicSeen = true;
+        if (pick != null) setRouteByUser(pick);
     }
 
     /** Cycles Speaker -> Earpiece/Wired -> Bluetooth -> Speaker. */
@@ -401,19 +477,20 @@ public final class CallManager {
         for (com.workdeck.app.web.BrowserTab t : com.workdeck.app.web.TabManager.get(mApp).allTabs()) {
             if (t.isCreated()) t.evaluate("window.__wdDevicesChanged && window.__wdDevicesChanged()");
         }
-        if (!mInCall) return;
-        List<Route> avail = availableRoutes();
-        if (added && avail.contains(Route.BLUETOOTH) && mRoute != Route.BLUETOOTH) {
-            // A headset was just connected: that's where the user wants to talk.
+        List<Route> before = mLastAvailable;
+        List<Route> now = availableRoutes();
+        mLastAvailable = now;
+        if (!mInCall || mRoute == null) return;
+        Route next = added ? RoutePolicy.onDeviceAdded(mRoute, before, now)
+                : RoutePolicy.onDeviceRemoved(mRoute, now, mVideo || voiceOnSpeaker());
+        if (next != mRoute) {
+            Log.i(TAG, (added ? "headset connected: " : "device gone: ") + mRoute + " -> " + next);
             mUserPicked = false;
-            applyRoute(Route.BLUETOOTH);
-        } else if (added && avail.contains(Route.WIRED) && mRoute != Route.WIRED && mRoute != Route.BLUETOOTH) {
-            mUserPicked = false;
-            applyRoute(Route.WIRED);
-        } else if (mRoute != null && !avail.contains(mRoute)) {
-            mUserPicked = false;
-            applyRoute(pickAutoRoute());
+            mBtRetries = 0;
+            applyRoute(next);
         }
+        // The engine reacts to the same event by picking its own device: check soon.
+        verifySoon();
     }
 
     // ------------------------------------------------------------------ keeping the route
@@ -424,6 +501,11 @@ public final class CallManager {
             if (mInCall && mRoute != null && !actualMatches(mRoute)) applyRoute(mRoute);
         }
     };
+
+    private void verifySoon() {
+        mMain.removeCallbacks(mVerifyOnce);
+        mMain.postDelayed(mVerifyOnce, REASSERT_DELAY_MS);
+    }
 
     private final Runnable mVerifyOnce = new Runnable() {
         @Override
@@ -436,7 +518,7 @@ public final class CallManager {
         @Override
         public void run() {
             verify();
-            if (mInCall) mMain.postDelayed(this, 2500);
+            if (mInCall) mMain.postDelayed(this, POLL_MS);
         }
     };
 
@@ -450,9 +532,10 @@ public final class CallManager {
 
     private void verify() {
         if (!mInCall || mRoute == null) return;
-        if (!availableRoutes().contains(mRoute)) {
+        List<Route> avail = availableRoutes();
+        if (!avail.contains(mRoute)) {
             mUserPicked = false;
-            applyRoute(pickAutoRoute());
+            applyRoute(RoutePolicy.onDeviceRemoved(mRoute, avail, mVideo || voiceOnSpeaker()));
             return;
         }
         boolean modeOk;
@@ -463,12 +546,12 @@ public final class CallManager {
         }
         if (actualMatches(mRoute) && modeOk) return;
         long now = SystemClock.elapsedRealtime();
-        if (now - mReassertWindowStart > 30000) {
+        if (now - mReassertWindowStart > 60000) {
             mReassertWindowStart = now;
             mReassertCount = 0;
         }
-        if (++mReassertCount > 6) {
-            // Something keeps changing it (e.g. the user in Android's own controls): let it be.
+        if (++mReassertCount > REASSERT_MAX_PER_MIN) {
+            // Something keeps changing it (another app's call, the system): let it be for now.
             return;
         }
         Log.i(TAG, "call audio moved away from " + mRoute + (modeOk ? "" : " (mode reset)") + "; restoring");
@@ -520,7 +603,8 @@ public final class CallManager {
             } else {
                 Log.w(TAG, "bluetooth audio would not connect; falling back");
                 mUserPicked = false;
-                applyRoute(availableRoutes().contains(Route.WIRED) ? Route.WIRED : phoneRoute());
+                List<Route> avail = availableRoutes();
+                applyRoute(avail.contains(Route.WIRED) ? Route.WIRED : RoutePolicy.phone(avail, mVideo || voiceOnSpeaker()));
             }
         }
     }

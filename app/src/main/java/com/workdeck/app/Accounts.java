@@ -32,7 +32,10 @@ public final class Accounts {
         return sInstance;
     }
 
+    private final Context mApp;
+
     private Accounts(Context app) {
+        mApp = app;
         mSp = app.getSharedPreferences("workdeck", Context.MODE_PRIVATE);
         load(Prefs.get(app));
     }
@@ -48,9 +51,35 @@ public final class Accounts {
                 mList.clear();
             }
         }
-        if (mList.isEmpty()) migrate(legacy);
+        if (mList.isEmpty()) {
+            if (Edition.solo(mApp)) seedSolo();
+            else migrate(legacy);
+        }
         mActive = mSp.getString(KEY_ACTIVE, mList.get(0).id);
         if (find(mActive) == null) mActive = mList.get(0).id;
+    }
+
+    /**
+     * A single-app build: exactly one account with exactly one app, in mobile view. It is
+     * its own installed app (its own storage), so it uses the WebView's default profile.
+     */
+    private void seedSolo() {
+        Site only = Edition.site(mApp);
+        Account a = new Account("a1", WebViewSupport.DEFAULT_PROFILE, Edition.account(mApp), 0);
+        a.type = Prefs.ACCOUNT_WORK;
+        a.lastSite = only;
+        for (Site s : Site.values()) {
+            a.setSiteEnabled(s, s == only);
+            a.setDesktop(s, false);
+        }
+        // Teams always presents a computer browser (it refuses phone browsers); Outlook
+        // too where the company is known to block phone browsers - the layout stays mobile.
+        if (Edition.computerIdentity(mApp)) a.setComputerIdentity(only, true);
+        a.markOpened(only);
+        mList.add(a);
+        mSp.edit().putInt(KEY_NEXT, 2).apply();
+        save();
+        Log.i(TAG, "single-app edition: " + a.name + " " + only.key);
     }
 
     /** Version 1.x had a single account: it becomes the first account, on the default profile. */

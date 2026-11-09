@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="edition_solo">true</bool>
+    <string name="edition_site" translatable="false">teams</string>
+    <bool name="edition_teams_links">true</bool>
+    <bool name="edition_outlook_links">false</bool>
+    <!-- Launcher icon: the word TEAMS on this colour (drawable/ic_launcher_foreground.xml). -->
+    <color name="launcher_bg">#5B5FC7</color>
+</resources>
