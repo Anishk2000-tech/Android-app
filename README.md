@@ -18,6 +18,28 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 
 ---
 
+## Single-app editions: OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook (1.0.0)
+Four separate, minimal apps made from WorkDeck's code, one per account and app:
+
+| App (name under the icon) | Icon says | Package | Starts as |
+|---|---|---|---|
+| **OMC** | TEAMS | `com.workdeck.omc.teams` | Teams, mobile view |
+| **OMC** | OUTLOOK | `com.workdeck.omc.outlook` | Outlook, mobile view (as a computer browser: OMC's sign-in policy blocks phone browsers) |
+| **CRAFTWW** | TEAMS | `com.workdeck.craftww.teams` | Teams, mobile view |
+| **CRAFTWW** | OUTLOOK | `com.workdeck.craftww.outlook` | Outlook, mobile view |
+
+* **Only the app itself:** the page fills the screen. There's no bottom bar, no account buttons and no menus. A small, faint **Aa** button on the right edge opens *text size* (A−, A+) and *zoom* (−, Fit, +). Drag it up or down if it covers something.
+* **Links stay in the account:** a link you tap opens inside the same app, signed in as that account, with a bar showing its name and a **×** to close it (Back on its first page closes it too). A Teams meeting link in OMC Outlook opens in the **OMC Teams** app (and an Outlook link in OMC Teams opens OMC Outlook), when that app is installed.
+* **Each app is separate:** each one has its own sign-in, background connection and notifications. All four and WorkDeck can be installed at the same time. Install only the ones you need.
+* **Calls (the Teams apps):** the call's sound goes to a **Bluetooth or wired headset** if one is connected. Otherwise it goes to the **earpiece for voice calls** (the screen turns off at your ear) and the **loudspeaker for video calls**, like a phone's own dialler. During a call, a button on the right edge shows where the sound is (*Earpiece*, *Speaker*, your headset's name); tap it to switch. A headset that connects mid-call takes the call over, and if it disconnects the call falls back to the phone. Switching on the camera in an earpiece call moves the sound to the loudspeaker. The *call in progress* notification has the same buttons.
+* **Install:** open each APK and tap *Install*. On first start, tap **Allow everything**, then **Start …**, then sign in with that company's account.
+
+### Call audio: what changed (for these apps, and next for WorkDeck)
+The phone's browser engine (Android System WebView) picks a call device on its own every time Teams opens the microphone: a headset if one is connected, otherwise always the **loudspeaker**, never the earpiece. It also re-picks when a headset connects or disconnects. WorkDeck used to put your choice back only 0.4–2.5 seconds later, so you'd hear a burst from the loudspeaker at the start of a call or when Teams re-opened the microphone. Teams also re-applies the microphone it saved last time at the start of every call, which could pull a call off your Bluetooth headset. Now:
+* WorkDeck notices any change of the call device and restores the right one within about 0.05 s.
+* Teams' saved device at the start of a call is ignored; only a device you pick during the call counts.
+* A call is followed by its connection, not just the microphone, so muting or Teams re-opening the mic never loses the device you picked.
+
 ## What's new in 1.4.2
 * **Messages are no longer marked as read ("Seen") without you seeing them.** Teams marks a chat's new messages as read whenever it believes you're looking at that chat, and tells the sender (and a group) *Seen*. Since 1.4.0 WorkDeck keeps Teams fully awake in the background, so Teams had more chances to guess wrong — above all with the **group chat you last had open**:
   * **Lock screen:** when a Teams call rang while the phone was locked, WorkDeck turned the screen on and showed Teams **over the lock screen**, with that chat open — and after a missed or declined call it **stayed allowed over the lock screen**, so each time the screen lit up (a notification, the power button) Teams could count the open chat as read. Now WorkDeck is shown over the lock screen only while a call rings or is in progress, and never counts as "looked at" there.
@@ -210,7 +232,9 @@ Install a newer WorkDeck APK over the old one — **you stay signed in**. This o
 ```bash
 ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew assembleRelease      # signed with your key if configured (below), else the debug key
+./gradlew :solo:assembleRelease  # the four single-app editions: solo/build/outputs/apk/<omc|craftww><Teams|Outlook>/release/
 ```
+The single-app editions are the `solo` module: the same Java code, assets and resources as `app`, plus their own manifest (`solo/src/main/AndroidManifest.xml`) and small per-app resource overrides: `solo/src/<teams|outlook>` (icon, site) and `solo/src/<omc|craftww>` (name, account). The edition is selected at run time by `Edition.java` from those resources. Without Gradle: `scripts/build-solo-offline.sh [account app]`. The icon words are generated by `solo/tools/word_icon.py` (needs `fonttools`).
 
 ### Signing with your release key
 Create `keystore.properties` in the project root (it is git-ignored — never commit it):
