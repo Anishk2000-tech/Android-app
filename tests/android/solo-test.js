@@ -319,8 +319,9 @@ async function signOut(key, p) {
     body: Buffer.from('<!doctype html><title>Stand-in Outlook</title><body><h1>stand-in inbox</h1></body>').toString('base64') }));
   const standIn = async () => {
     await p.send('Page.navigate', { url: STAND_IN });
+    // Loaded completely (the address changes before the page's body exists).
     for (let i = 0; i < 15; i++) {
-      if (/wd-ci-signout/.test(String(await p.eval('location.href', 4000)))) return true;
+      if (/wd-ci-signout\|complete\|true/.test(String(await p.eval('location.href + "|" + document.readyState + "|" + !!document.body', 4000)))) return true;
       await sleep(1000);
     }
     return false;
@@ -341,10 +342,10 @@ async function signOut(key, p) {
   // 2. The same from a hidden frame (how one Microsoft page signs the others out).
   sh('adb logcat -c');
   await standIn();
-  await p.eval(`(() => { const f = document.createElement('iframe'); f.id = 'so'; f.src = ${JSON.stringify(SIGN_OUT)}; document.body.appendChild(f); return 'ok'; })()`, 4000);
+  const framed = await p.eval(`(() => { const f = document.createElement('iframe'); f.id = 'so'; f.src = ${JSON.stringify(SIGN_OUT)}; document.body.appendChild(f); return 'frame added'; })()`, 4000);
   const refusedFrame = await waitFor(() => /tried to sign out by itself \(in the background.*not carried out/.test(events()), 15000);
   check(`${app.name}: a sign-out from a hidden frame is not carried out either`, refusedFrame,
-    events().split('\n').filter((l) => /sign/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).join(' | '));
+    JSON.stringify(framed) + ' || ' + events().split('\n').filter((l) => /sign/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).join(' | '));
   check(`${app.name}: ...without loading the page again in a loop`, /loaded again only/.test(events()) && /wd-ci-signout/.test(await href()), await href());
 
   // 3. The user taps (a real touch) and signs out: carried out, then back to Outlook's sign-in page.
@@ -374,7 +375,10 @@ async function signOut(key, p) {
   await sleep(2500);
   const chooser = ui('texts');
   shot(key + '-share-log');
-  check(`${app.name}: holding Reload offers to share the activity log`, /Share the activity log/.test(chooser), chooser.split('\n').slice(0, 4).join(' | '));
+  // Android's share sheet shows the text being shared: the log's heading (app, phone, engine).
+  check(`${app.name}: holding Reload offers to share the activity log`,
+    new RegExp(app.name + ' \\d+\\.\\d+\\.\\d+ \\(' + app.pkg.replace(/\./g, '\\.') + '\\)').test(chooser) && /Times are the phone's local time/.test(chooser),
+    chooser.split('\n').slice(0, 4).join(' | '));
   sh('adb shell input keyevent KEYCODE_BACK');
   await sleep(1200);
 }

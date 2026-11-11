@@ -97,8 +97,8 @@ public final class EventLog {
             if (wv != null) engine = wv.packageName + " " + wv.versionName;
         } catch (Throwable ignored) {
         }
-        sb.append(app.getString(R.string.app_name)).append(' ').append(Edition.solo(app)
-                        ? String.valueOf(Edition.site(app)) : "WorkDeck").append(' ').append(version)
+        sb.append(app.getString(R.string.app_name)).append(' ').append(!Edition.solo(app) ? "(WorkDeck)"
+                        : Edition.site(app) == Site.TEAMS ? "Teams" : "Outlook").append(' ').append(version)
                 .append(" (").append(app.getPackageName()).append(")\n")
                 .append("Android ").append(Build.VERSION.RELEASE).append(", ").append(Build.MANUFACTURER).append(' ')
                 .append(Build.MODEL).append(", engine ").append(engine).append("\n")

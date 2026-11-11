@@ -1000,6 +1000,7 @@ public final class BrowserTab {
     private volatile long mSignOutReloadAt;
     private volatile long mSignOutLoggedAt;
     private volatile String mSignOutLogged;
+    private volatile SignOutGuard.Action mSignOutLoggedAction;
     private boolean mSignOutReloadPending;
 
     private String siteName() {
@@ -1037,10 +1038,12 @@ public final class BrowserTab {
         String what = shortUrl(url);
         // One sign-out is several requests (the page, its redirects, frames): one diary line.
         // A page that keeps trying is noted every few minutes, not every time.
+        // (Trying again right after the reload is always noted: it says the reload didn't help.)
         long quiet = action == SignOutGuard.Action.REFUSE ? 5 * 60_000 : 5000;
-        boolean log = !what.equals(mSignOutLogged) || since(mSignOutLoggedAt) > quiet;
+        boolean log = !what.equals(mSignOutLogged) || action != mSignOutLoggedAction || since(mSignOutLoggedAt) > quiet;
         if (log) {
             mSignOutLogged = what;
+            mSignOutLoggedAction = action;
             mSignOutLoggedAt = SystemClock.elapsedRealtime();
         }
         if (action == SignOutGuard.Action.ALLOW) {
