@@ -94,6 +94,16 @@ def main():
             time.sleep(1.5)
         print("could not find %r" % label)
         return 1
+    if cmd == "hold":
+        # Long press (a swipe that stays in place).
+        node = find(dump(), label)
+        c = center(node) if node is not None else None
+        if not c:
+            print("could not find %r" % label)
+            return 1
+        adb("shell", "input", "swipe", str(c[0]), str(c[1]), str(c[0]), str(c[1]), "1200")
+        print("held %r at %s" % (label, c))
+        return 0
     return 2
 
 

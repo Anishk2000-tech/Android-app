@@ -169,6 +169,11 @@
     <string name="sec_advanced">Advanced</string>
     <string name="set_sw_shim">Service-worker notification helper</string>
     <string name="set_sw_shim_desc">Lets notifications sent from background workers appear. Turn off only if a page misbehaves.</string>
+    <string name="set_keep_signed_in">Stay signed in</string>
+    <string name="set_keep_signed_in_desc">Teams or Outlook left untouched for some hours may sign the account out by itself. WorkDeck then doesn\'t follow and loads the page again. Your own "Sign out" always works. Turn off if your company requires signing in again after a time without use.</string>
+    <string name="set_event_log">Share the activity log</string>
+    <string name="set_event_log_desc">What WorkDeck noted about sign-ins, sign-outs and pages that failed to load (times and page addresses only, no messages or passwords). Useful to find out why something happened.</string>
+    <string name="event_log_subject">%1$s activity log</string>
     <string name="set_debug">Web debugging (chrome://inspect)</string>
     <string name="set_debug_desc">For troubleshooting with a computer. Takes effect after restarting the app.</string>
     <string name="sec_about">About</string>

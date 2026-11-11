@@ -866,6 +866,7 @@ public final class BrowserTab {
                             // The site's own page is there again: a later failure starts over.
                             if (mHealAttempts > 0 && v != null && v.startsWith("\"https://" + UrlRouter.host(target))) {
                                 Log.i(TAG, key + ": the page loads again (after " + mHealAttempts + " recovery step(s))");
+                                com.workdeck.app.EventLog.add(mApp, key + ": the page loads again (after " + mHealAttempts + " recovery step(s))");
                                 mHealAttempts = 0;
                             }
                             return;
@@ -878,6 +879,7 @@ public final class BrowserTab {
                         Log.w(TAG, key + ": the page shows the engine's error page (" + desc + ")");
                         if (selfHeal(view, target, desc)) return;
                         mError = desc;
+                        com.workdeck.app.EventLog.add(mApp, key + ": error screen shown (" + desc + ") for " + shortUrl(target));
                         changed();
                     }
                 });
@@ -902,6 +904,7 @@ public final class BrowserTab {
             android.webkit.WebStorage ws = WebViewSupport.webStorage(account.profile);
             if (ws != null) ws.deleteOrigin(origin);
             Log.w(TAG, key + ": removed " + origin + "'s service worker and stored files; loading again");
+            com.workdeck.app.EventLog.add(mApp, key + ": removed " + origin + "'s service worker and stored files");
         } catch (Throwable t) {
             Log.w(TAG, "could not clear the site's storage", t);
         }
@@ -962,6 +965,7 @@ public final class BrowserTab {
         }
         mHealAttempts++;
         Log.w(TAG, key + ": " + desc + " loading " + url + " (attempt " + mHealAttempts + ")");
+        com.workdeck.app.EventLog.add(mApp, key + ": " + desc + " loading " + shortUrl(url) + " (attempt " + mHealAttempts + ")");
         final String target = url;
         // 1: load again. 2: remove the site's service worker and stored files, load again
         // (that load may still go through the old worker, it triggers its removal). 3: load
@@ -980,12 +984,138 @@ public final class BrowserTab {
             mPrefs.raw().edit().putBoolean("sw_off_" + key, true).apply();
             SwShim.keepOff(mApp, account.profile, UrlRouter.host(url));
             Log.w(TAG, key + ": service workers off for this site; loading again");
+            com.workdeck.app.EventLog.add(mApp, key + ": service workers off for this site; loading again");
             clearSiteStorage(url);
             registerScript();
             loadAgainSoon(target);
             return true;
         }
         return false;
+    }
+
+    // ------------------------------------------------------------------ sign-outs nobody asked for
+
+    private String mLoginLogged;
+    private volatile long mSignOutAllowedAt;
+    private volatile long mSignOutReloadAt;
+    private volatile long mSignOutLoggedAt;
+    private volatile String mSignOutLogged;
+    private boolean mSignOutReloadPending;
+
+    private String siteName() {
+        return web != null ? "the page" : site == Site.TEAMS ? "Teams" : "Outlook";
+    }
+
+    private static String touchText(long sinceTouch) {
+        String ago = SignOutGuard.ago(sinceTouch);
+        return "never".equals(ago) ? "not touched since the app started" : "last touch " + ago + " ago";
+    }
+
+    private static long since(long at) {
+        return at == 0 ? Long.MAX_VALUE / 4 : SystemClock.elapsedRealtime() - at;
+    }
+
+    /** Host and path of an address - never its parameters (they can hold account details). */
+    private static String shortUrl(String url) {
+        return UrlRouter.host(url) + UrlRouter.path(url);
+    }
+
+    /**
+     * The page wants to load a sign-out address (see {@link SignOutGuard}). Returns true if
+     * that must not happen: the user didn't ask for it. Then the site is loaded again
+     * instead (it opens signed in, the sign-in was never ended). Called from the main
+     * thread (navigations) and from the engine's network thread (requests of any frame).
+     */
+    private boolean refuseSignOut(String url, boolean mainFrame) {
+        if (!mPrefs.raw().getBoolean("keep_signed_in", true)) return false;
+        long sinceTouch = since(com.workdeck.app.UiState.lastTouchAt);
+        // On screen: this tab is the one shown. (Not "the user is looking": a dialog of the
+        // page, e.g. "Sign out?", takes the window's focus for a moment.)
+        boolean onScreen = com.workdeck.app.UiState.activityVisible && key.equals(com.workdeck.app.UiState.visibleTab);
+        SignOutGuard.Action action = SignOutGuard.decide(onScreen, sinceTouch,
+                since(mSignOutAllowedAt), since(mSignOutReloadAt));
+        String what = shortUrl(url);
+        // One sign-out is several requests (the page, its redirects, frames): one diary line.
+        boolean log = !what.equals(mSignOutLogged) || since(mSignOutLoggedAt) > 5000;
+        mSignOutLogged = what;
+        mSignOutLoggedAt = SystemClock.elapsedRealtime();
+        if (action == SignOutGuard.Action.ALLOW) {
+            if (since(mSignOutAllowedAt) > SignOutGuard.FOLLOW_UP_MS) {
+                com.workdeck.app.EventLog.add(mApp, key + ": sign-out by the user (" + touchText(sinceTouch) + "): " + what);
+            }
+            if (onScreen && sinceTouch < SignOutGuard.USER_WINDOW_MS) {
+                mSignOutAllowedAt = SystemClock.elapsedRealtime();
+            }
+            return false;
+        }
+        if (log) {
+            com.workdeck.app.EventLog.add(mApp, key + ": the page tried to sign out by itself ("
+                    + (mainFrame ? "page" : "in the background") + "; " + touchText(sinceTouch)
+                    + ", " + (onScreen ? "on screen" : "not on screen")
+                    + "): " + what + " - not carried out"
+                    + (action == SignOutGuard.Action.REFUSE_AND_RELOAD ? ", loading " + siteName() + " again"
+                    : ", loaded again only " + SignOutGuard.ago(since(mSignOutReloadAt)) + " ago"));
+        }
+        final long delay = action == SignOutGuard.Action.REFUSE_AND_RELOAD ? 1500
+                : Math.max(1500, SignOutGuard.RELOAD_EVERY_MS - since(mSignOutReloadAt));
+        if (action == SignOutGuard.Action.REFUSE_AND_RELOAD) mSignOutReloadAt = SystemClock.elapsedRealtime();
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                reloadAfterRefusedSignOut(delay);
+            }
+        });
+        return true;
+    }
+
+    /** Loads the tab's own page again after a refused sign-out (one pending reload at a time). */
+    private void reloadAfterRefusedSignOut(long delayMs) {
+        if (mSignOutReloadPending) return;
+        mSignOutReloadPending = true;
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                mSignOutReloadPending = false;
+                if (mWebView == null) return;
+                mSignOutReloadAt = SystemClock.elapsedRealtime();
+                mError = null;
+                if (web != null) {
+                    mWebView.loadUrl(web.url);
+                } else {
+                    Log.i(TAG, key + ": loading again after a refused sign-out");
+                    mWebView.loadUrl(account.homeUrl(site));
+                }
+                changed();
+            }
+        }, delayMs);
+    }
+
+    /** What a refused request gets instead: nothing (the sign-out address is never contacted). */
+    private static WebResourceResponse emptyResponse() {
+        return new WebResourceResponse("text/html", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+    }
+
+    /**
+     * The tab's page is Microsoft's "You signed out of your account" page (a sign-out that
+     * was carried out: the user's own). There is nothing to tap on it, so go back to the
+     * site, which shows its sign-in page - after the page had time to sign the account out
+     * of Microsoft's other apps too.
+     */
+    private void leaveSignedOutPage(final WebView view) {
+        mMain.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (view != mWebView || mWebView == null || web != null) return;
+                if (!UrlRouter.isSignOut(mWebView.getUrl())) return;
+                // (After a refused sign-out an empty page can stand at that address for a
+                // moment; then nothing was signed out and the reload is already on its way.)
+                if (since(mSignOutAllowedAt) < 5 * 60_000 || !mPrefs.raw().getBoolean("keep_signed_in", true)) {
+                    com.workdeck.app.EventLog.add(mApp, key + ": signed out; back to " + siteName() + " (sign-in page)");
+                }
+                mSignOutAllowedAt = 0;
+                mWebView.loadUrl(account.homeUrl(site));
+            }
+        }, 5000);
     }
 
     /**
@@ -999,6 +1129,7 @@ public final class BrowserTab {
 
     public boolean handleNavigation(WebView view, String url, boolean userGesture, boolean isRedirect) {
         if (url == null) return false;
+        if (UrlRouter.isSignOut(url) && refuseSignOut(url, true)) return true;
         if (UrlRouter.isHttp(url)) {
             Site target = UrlRouter.siteFor(url);
             if (target != null && target != site && mHost != null && canRouteTo(target)
@@ -1148,6 +1279,8 @@ public final class BrowserTab {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            String u = request.getUrl().toString();
+            if (UrlRouter.isSignOut(u) && refuseSignOut(u, request.isForMainFrame())) return emptyResponse();
             return SwShim.maybeIntercept(mApp, account.profile, request, cookies());
         }
 
@@ -1209,6 +1342,17 @@ public final class BrowserTab {
             if (view == mWebView && web == null) {
                 if (!UrlRouter.isHttp(url) || UrlRouter.siteFor(url) == site) Log.i(TAG, key + ": page finished " + url);
                 scheduleErrorCheck(view, url, 0);
+                if (UrlRouter.isSignOut(url)) {
+                    leaveSignedOutPage(view);
+                } else if (UrlRouter.isLogin(url) && !shortUrl(url).equals(mLoginLogged)) {
+                    // The sign-in page in the site's own tab: the sign-in ended (or never was).
+                    mLoginLogged = shortUrl(url);
+                    com.workdeck.app.EventLog.add(mApp, key + ": sign-in page shown: " + mLoginLogged + " ("
+                            + touchText(since(com.workdeck.app.UiState.lastTouchAt)) + ")");
+                } else if (UrlRouter.siteFor(url) == site && mLoginLogged != null) {
+                    mLoginLogged = null;
+                    com.workdeck.app.EventLog.add(mApp, key + ": signed in, " + siteName() + " loaded");
+                }
             }
             changed();
         }
@@ -1227,17 +1371,24 @@ public final class BrowserTab {
             }
             mErrorReportedAt = SystemClock.elapsedRealtime();
             mError = desc;
+            if (view == mWebView) {
+                com.workdeck.app.EventLog.add(mApp, key + ": error screen shown (" + desc + ") for "
+                        + shortUrl(request.getUrl().toString()));
+            }
             changed();
         }
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            String u = request.getUrl().toString();
+            if (UrlRouter.isSignOut(u) && refuseSignOut(u, request.isForMainFrame())) return emptyResponse();
             return SwShim.maybeIntercept(mApp, account.profile, request, cookies());
         }
 
         @Override
         public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
             Log.w(TAG, key + ": renderer gone, crashed=" + detail.didCrash());
+            com.workdeck.app.EventLog.add(mApp, key + ": the page's process ended (" + (detail.didCrash() ? "crashed" : "ended by Android") + ")");
             if (view != mWebView) {
                 // A popup lost its renderer: close it.
                 if (mHost != null) mHost.closePopup(view);

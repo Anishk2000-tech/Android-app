@@ -21,6 +21,7 @@ public final class WorkDeckApp extends Application {
     public void onCreate() {
         super.onCreate();
         Notifier.get(this).createChannels();
+        EventLog.add(this, "app started");
     }
 
     public static void setMainActivity(Activity a) {

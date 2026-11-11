@@ -22,6 +22,13 @@ public final class UiState {
      */
     public static volatile boolean userPresent;
 
+    /**
+     * When the user last really touched the app (a touch or key in its window;
+     * SystemClock.elapsedRealtime), 0 if not since it started. Opening the app from a
+     * notification or the launcher is not a touch.
+     */
+    public static volatile long lastTouchAt;
+
     public static boolean isLookingAt(String tabKey) {
         return userPresent && activityResumed && tabKey != null && tabKey.equals(visibleTab);
     }

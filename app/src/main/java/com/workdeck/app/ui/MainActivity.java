@@ -575,6 +575,16 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         });
         View reload = findViewById(R.id.zoom_reload);
         reload.setVisibility(View.VISIBLE);
+        // Holding Reload shares the app's activity log (why was I signed out? why did a page fail?).
+        reload.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                mZoomBar.setVisibility(View.GONE);
+                refreshUi();
+                shareEventLog(MainActivity.this);
+                return true;
+            }
+        });
         reload.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -640,6 +650,18 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 mSoloDock.setTranslationY(Math.max(0, Math.min(max, f * (b - t))));
             }
         });
+    }
+
+    /** Hands the app's activity log (see EventLog) to another app the user picks (mail, chat, notes). */
+    static void shareEventLog(Activity a) {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, a.getString(R.string.event_log_subject, a.getString(R.string.app_name)))
+                    .putExtra(Intent.EXTRA_TEXT, com.workdeck.app.EventLog.text(a));
+            a.startActivity(Intent.createChooser(send, a.getString(R.string.set_event_log)));
+        } catch (Throwable t) {
+            android.util.Log.w("WorkDeck/Main", "could not share the activity log", t);
+        }
     }
 
     private void refreshSoloControls() {
@@ -1249,6 +1271,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
     @Override
     public void onUserInteraction() {
         super.onUserInteraction();
+        UiState.lastTouchAt = SystemClock.elapsedRealtime();
         mLaunchedForCall = false;
         boolean wasIdle = SystemClock.elapsedRealtime() - mLastInteraction >= IDLE_MS;
         mLastInteraction = SystemClock.elapsedRealtime();

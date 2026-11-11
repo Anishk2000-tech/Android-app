@@ -305,6 +305,80 @@ async function siblingLink(p) {
   check('OMC Teams: an Outlook link opens in the OMC Outlook app', opened, topPackage());
 }
 
+// Outlook left untouched for hours can sign the account out by itself (Microsoft 365's idle
+// session timeout): the app must not follow a sign-out nobody asked for, but the user's own
+// "Sign out" has to work - and must not end on Microsoft's dead-end "You signed out" page.
+async function signOut(key, p) {
+  const app = APPS[key];
+  const events = () => sh('adb logcat -d -s WorkDeck/Events');
+  const STAND_IN = 'https://outlook.office.com/mail/wd-ci-signout';
+  const SIGN_OUT = 'https://login.microsoftonline.com/common/oauth2/v2.0/logout';
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: STAND_IN + '*', requestStage: 'Request' }] });
+  p.on('Fetch.requestPaused', (e) => p.send('Fetch.fulfillRequest', { requestId: e.requestId, responseCode: 200,
+    responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+    body: Buffer.from('<!doctype html><title>Stand-in Outlook</title><body><h1>stand-in inbox</h1></body>').toString('base64') }));
+  const standIn = async () => {
+    await p.send('Page.navigate', { url: STAND_IN });
+    for (let i = 0; i < 15; i++) {
+      if (/wd-ci-signout/.test(String(await p.eval('location.href', 4000)))) return true;
+      await sleep(1000);
+    }
+    return false;
+  };
+  const href = async () => String(await p.eval('location.href', 4000));
+
+  // 1. Nobody touched the app for a while; the page goes to Microsoft's sign-out by itself.
+  sh('adb logcat -c');
+  check(`${app.name}: stand-in Outlook page loaded for the sign-out test`, await standIn(), await href());
+  await p.eval(`setTimeout(() => { location.href = ${JSON.stringify(SIGN_OUT)}; }, 300); 'ok'`, 4000);
+  const refused = await waitFor(() => /tried to sign out by itself \(page.*not carried out, loading Outlook again/.test(events()), 15000);
+  check(`${app.name}: a sign-out nobody asked for is not carried out`, refused,
+    events().split('\n').filter((l) => /sign/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).join(' | '));
+  let back = false;
+  for (let i = 0; i < 20 && !back; i++) { await sleep(1000); const u = await href(); back = !/logout|wd-ci-signout/.test(u) && /^https:/.test(u); }
+  check(`${app.name}: ...and Outlook is loaded again instead (never Microsoft's sign-out page)`, back, await href());
+
+  // 2. The same from a hidden frame (how one Microsoft page signs the others out).
+  sh('adb logcat -c');
+  await standIn();
+  await p.eval(`(() => { const f = document.createElement('iframe'); f.id = 'so'; f.src = ${JSON.stringify(SIGN_OUT)}; document.body.appendChild(f); return 'ok'; })()`, 4000);
+  const refusedFrame = await waitFor(() => /tried to sign out by itself \(in the background.*not carried out/.test(events()), 15000);
+  check(`${app.name}: a sign-out from a hidden frame is not carried out either`, refusedFrame,
+    events().split('\n').filter((l) => /sign/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).join(' | '));
+  check(`${app.name}: ...without loading the page again in a loop`, /loaded again only/.test(events()) && /wd-ci-signout/.test(await href()), await href());
+
+  // 3. The user taps (a real touch) and signs out: carried out, then back to Outlook's sign-in page.
+  sh('adb logcat -c');
+  await standIn();
+  sh('adb shell input tap 400 900');
+  await sleep(700);
+  await p.eval(`location.href = ${JSON.stringify(SIGN_OUT)}; 'ok'`, 4000, true);
+  const allowed = await waitFor(() => /sign-out by the user/.test(events()), 15000);
+  check(`${app.name}: the user's own sign-out is carried out`, allowed && !/tried to sign out by itself/.test(events()),
+    events().split('\n').filter((l) => /sign/.test(l)).map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).join(' | '));
+  const left = await waitFor(() => /signed out; back to Outlook/.test(events()), 30000);
+  let onSignIn = false;
+  for (let i = 0; i < 20 && !onSignIn; i++) { await sleep(1000); const u = await href(); onSignIn = !/logout|wd-ci-signout/.test(u) && /^https:/.test(u); }
+  shot(key + '-after-signout');
+  check(`${app.name}: after signing out the app returns to Outlook's sign-in page (no dead end)`, left && onSignIn, await href());
+  await p.send('Fetch.disable');
+
+  // 4. The activity log on the phone has it all, and holding Reload shares it.
+  const diary = sh(`adb shell run-as ${app.pkg} cat files/events.log`);
+  check(`${app.name}: the activity log on the phone recorded it (no page parameters)`,
+    /app started/.test(diary) && /tried to sign out by itself/.test(diary) && /sign-out by the user/.test(diary) && !/[?]/.test(diary.replace(/\(.*?\)/g, '')),
+    diary.split('\n').slice(-6).join(' | '));
+  ui('tap "=Text size and zoom"');
+  await sleep(800);
+  ui('hold "=Reload"');
+  await sleep(2500);
+  const chooser = ui('texts');
+  shot(key + '-share-log');
+  check(`${app.name}: holding Reload offers to share the activity log`, /Share the activity log/.test(chooser), chooser.split('\n').slice(0, 4).join(' | '));
+  sh('adb shell input keyevent KEYCODE_BACK');
+  await sleep(1200);
+}
+
 (async () => {
   for (const key of ['omcTeams', 'omcOutlook', 'craftwwOutlook', 'craftwwTeams']) await firstRun(key);
 
@@ -325,7 +399,10 @@ async function siblingLink(p) {
   sh(`adb shell am start -W -n ${APPS.omcOutlook.pkg}/${MAIN}`);
   await sleep(4000);
   p = await mainScreen('omcOutlook', true);
-  if (p) p.close();
+  if (p) {
+    await signOut('omcOutlook', p);
+    p.close();
+  }
 
   // CRAFTWW Outlook: a phone browser (switches by itself if a policy blocks it).
   sh(`adb shell am start -W -n ${APPS.craftwwOutlook.pkg}/${MAIN}`);

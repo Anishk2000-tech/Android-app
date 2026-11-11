@@ -259,6 +259,20 @@ public final class SettingsActivity extends Activity {
                 Toast.makeText(SettingsActivity.this, R.string.restart_needed, Toast.LENGTH_LONG).show();
             }
         });
+        toggle(adv, R.string.set_keep_signed_in, R.string.set_keep_signed_in_desc,
+                mPrefs.raw().getBoolean("keep_signed_in", true), new Toggle() {
+                    @Override
+                    public void set(boolean v) {
+                        mPrefs.raw().edit().putBoolean("keep_signed_in", v).apply();
+                    }
+                });
+        Ui.clickRow(adv, getString(R.string.set_event_log), getString(R.string.set_event_log_desc),
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        MainActivity.shareEventLog(SettingsActivity.this);
+                    }
+                });
         toggle(adv, R.string.set_debug, R.string.set_debug_desc, mPrefs.webDebugging(), new Toggle() {
             @Override
             public void set(boolean v) {

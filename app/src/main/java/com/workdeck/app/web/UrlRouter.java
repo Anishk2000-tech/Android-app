@@ -160,6 +160,49 @@ public final class UrlRouter {
                 || h.startsWith("device.login") || h.endsWith(".msauth.net") || h.startsWith("mysignins.");
     }
 
+    /** Lowercase path of an absolute URL, without query or fragment ("" if none). */
+    public static String path(String url) {
+        if (url == null) return "";
+        int scheme = url.indexOf("://");
+        if (scheme <= 0) return "";
+        int start = url.indexOf('/', scheme + 3);
+        int end = url.length();
+        for (int i = scheme + 3; i < url.length(); i++) {
+            char ch = url.charAt(i);
+            if (ch == '?' || ch == '#') {
+                end = i;
+                break;
+            }
+        }
+        if (start < 0 || start >= end) return "";
+        return url.substring(start, end).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * An address that signs the account out: Microsoft's sign-out pages (which end the
+     * sign-in for every Microsoft page in the profile) and Outlook's / Teams' own.
+     */
+    public static boolean isSignOut(String url) {
+        if (!isHttp(url)) return false;
+        String h = host(url);
+        String p = path(url);
+        if (h.startsWith("login.")) {
+            if (p.contains("logout") || p.contains("signout")) return true;
+            // WS-Federation sign-out is a query parameter of the sign-in address.
+            String u = url.toLowerCase(Locale.ROOT);
+            return u.contains("wa=wsignout");
+        }
+        if (isOutlook(url)) {
+            return p.contains("logoff.owa") || p.contains("/logoff.aspx") || p.endsWith("/signout")
+                    || p.endsWith("/logout");
+        }
+        if (isTeams(url)) return p.endsWith("/signout") || p.endsWith("/logout");
+        if (hostMatches(h, "office.com") || hostMatches(h, "microsoft365.com") || hostMatches(h, "cloud.microsoft")) {
+            return p.contains("/estslogout") || p.endsWith("/logout") || p.endsWith("/signout");
+        }
+        return false;
+    }
+
     /**
      * Windows that must stay attached to the page that opened them (they report back to
      * it): Microsoft sign-in, and OAuth / single-sign-on pages of other services.

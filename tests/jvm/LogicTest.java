@@ -124,6 +124,43 @@ public final class LogicTest {
             eq(RoutePolicy.micToRoute("default", withBt, false), null, "'Automatic' microphone: no device change");
         }
 
+        // Sign-out addresses, and whose sign-out it is.
+        {
+            check(UrlRouter.isSignOut("https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=x"), "Microsoft sign-out (v2)");
+            check(UrlRouter.isSignOut("https://login.microsoftonline.com/common/oauth2/logout"), "Microsoft sign-out (v1)");
+            check(UrlRouter.isSignOut("https://login.microsoftonline.com/3f2a/oauth2/v2.0/logoutsession?sid=1"), "Microsoft sign-out of one session");
+            check(UrlRouter.isSignOut("https://login.microsoftonline.com/logout.srf?ct=1"), "Microsoft logout.srf");
+            check(UrlRouter.isSignOut("https://login.microsoftonline.com/login.srf?wa=wsignout1.0"), "federated sign-out (parameter)");
+            check(UrlRouter.isSignOut("https://login.live.com/oauth20_logout.srf"), "personal account sign-out");
+            check(UrlRouter.isSignOut("https://outlook.office.com/owa/logoff.owa"), "Outlook sign-out");
+            check(UrlRouter.isSignOut("https://outlook.cloud.microsoft/owa/logoff.owa?x=1"), "Outlook sign-out (new address)");
+            check(!UrlRouter.isSignOut("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?post_logout_redirect_uri=https://x/logout"), "sign-in is not a sign-out (even with 'logout' in its parameters)");
+            check(!UrlRouter.isSignOut("https://outlook.office.com/mail/"), "Outlook's inbox is not a sign-out");
+            check(!UrlRouter.isSignOut("https://teams.microsoft.com/v2/"), "Teams is not a sign-out");
+            check(!UrlRouter.isSignOut("https://example.com/logout"), "another site's sign-out is its own business");
+            eq(UrlRouter.path("https://Login.microsoftonline.com/Common/OAuth2/Logout?x=/y#z"), "/common/oauth2/logout", "path: lowercase, no parameters");
+            eq(UrlRouter.path("https://outlook.office.com"), "", "path: none");
+
+            long never = Long.MAX_VALUE / 4;
+            eq(com.workdeck.app.web.SignOutGuard.decide(true, 3000, never, never), com.workdeck.app.web.SignOutGuard.Action.ALLOW,
+                    "the user tapped Sign out a moment ago: carried out");
+            eq(com.workdeck.app.web.SignOutGuard.decide(true, 3L * 3600 * 1000, never, never), com.workdeck.app.web.SignOutGuard.Action.REFUSE_AND_RELOAD,
+                    "untouched for 3 hours, the page signs out by itself: refused, site loaded again");
+            eq(com.workdeck.app.web.SignOutGuard.decide(false, 3000, never, never), com.workdeck.app.web.SignOutGuard.Action.REFUSE_AND_RELOAD,
+                    "a tab that isn't on screen signs out: refused (the touch was elsewhere)");
+            eq(com.workdeck.app.web.SignOutGuard.decide(true, never, never, never), com.workdeck.app.web.SignOutGuard.Action.REFUSE_AND_RELOAD,
+                    "never touched since the app started: refused");
+            eq(com.workdeck.app.web.SignOutGuard.decide(false, 80000, 20000, never), com.workdeck.app.web.SignOutGuard.Action.ALLOW,
+                    "requests that follow the user's own sign-out: carried out");
+            eq(com.workdeck.app.web.SignOutGuard.decide(false, never, never, 60000), com.workdeck.app.web.SignOutGuard.Action.REFUSE,
+                    "tries again right after the reload: refused, no reload loop");
+            eq(com.workdeck.app.web.SignOutGuard.decide(false, never, never, 11 * 60000), com.workdeck.app.web.SignOutGuard.Action.REFUSE_AND_RELOAD,
+                    "tries again later: refused, loaded again");
+            eq(com.workdeck.app.web.SignOutGuard.ago(45000), "45 s", "ago: seconds");
+            eq(com.workdeck.app.web.SignOutGuard.ago(3L * 3600 * 1000 + 12 * 60000), "3 h 12 min", "ago: hours");
+            eq(com.workdeck.app.web.SignOutGuard.ago(never), "never", "ago: never");
+        }
+
         System.out.println(failures == 0 ? "\nall logic checks passed" : "\n" + failures + " FAILED");
         System.exit(failures == 0 ? 0 : 1);
     }
