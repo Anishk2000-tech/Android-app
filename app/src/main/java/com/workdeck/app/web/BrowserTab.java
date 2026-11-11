@@ -1036,9 +1036,13 @@ public final class BrowserTab {
                 since(mSignOutAllowedAt), since(mSignOutReloadAt));
         String what = shortUrl(url);
         // One sign-out is several requests (the page, its redirects, frames): one diary line.
-        boolean log = !what.equals(mSignOutLogged) || since(mSignOutLoggedAt) > 5000;
-        mSignOutLogged = what;
-        mSignOutLoggedAt = SystemClock.elapsedRealtime();
+        // A page that keeps trying is noted every few minutes, not every time.
+        long quiet = action == SignOutGuard.Action.REFUSE ? 5 * 60_000 : 5000;
+        boolean log = !what.equals(mSignOutLogged) || since(mSignOutLoggedAt) > quiet;
+        if (log) {
+            mSignOutLogged = what;
+            mSignOutLoggedAt = SystemClock.elapsedRealtime();
+        }
         if (action == SignOutGuard.Action.ALLOW) {
             if (since(mSignOutAllowedAt) > SignOutGuard.FOLLOW_UP_MS) {
                 com.workdeck.app.EventLog.add(mApp, key + ": sign-out by the user (" + touchText(sinceTouch) + "): " + what);

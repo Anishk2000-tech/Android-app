@@ -192,16 +192,19 @@ public final class UrlRouter {
             String u = url.toLowerCase(Locale.ROOT);
             return u.contains("wa=wsignout");
         }
-        if (isOutlook(url)) {
-            return p.contains("logoff.owa") || p.contains("/logoff.aspx") || p.endsWith("/signout")
-                    || p.endsWith("/logout");
-        }
-        if (isTeams(url)) return p.endsWith("/signout") || p.endsWith("/logout");
-        if (hostMatches(h, "office.com") || hostMatches(h, "microsoft365.com") || hostMatches(h, "cloud.microsoft")) {
-            return p.contains("/estslogout") || p.endsWith("/logout") || p.endsWith("/signout");
+        if (isOutlook(url) || isTeams(url) || hostMatches(h, "office.com") || hostMatches(h, "microsoft365.com")
+                || hostMatches(h, "cloud.microsoft")) {
+            // A part of the path that is a sign-out page: /owa/logoff.owa, /owa/auth/signout.aspx,
+            // /estslogout, /logout (not a mail or chat id that happens to contain the letters).
+            for (String part : p.split("/")) {
+                if (SIGN_OUT_PART.matcher(part).find()) return true;
+            }
         }
         return false;
     }
+
+    private static final java.util.regex.Pattern SIGN_OUT_PART = java.util.regex.Pattern.compile(
+            "^(ests)?(logoff|logout|signout|sign-out)([._-][a-z0-9._-]*)?$");
 
     /**
      * Windows that must stay attached to the page that opened them (they report back to

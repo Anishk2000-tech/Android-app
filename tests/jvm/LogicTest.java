@@ -135,6 +135,11 @@ public final class LogicTest {
             check(UrlRouter.isSignOut("https://outlook.office.com/owa/logoff.owa"), "Outlook sign-out");
             check(UrlRouter.isSignOut("https://outlook.cloud.microsoft/owa/logoff.owa?x=1"), "Outlook sign-out (new address)");
             check(!UrlRouter.isSignOut("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?post_logout_redirect_uri=https://x/logout"), "sign-in is not a sign-out (even with 'logout' in its parameters)");
+            check(UrlRouter.isSignOut("https://outlook.office.com/owa/auth/signout.aspx"), "Outlook sign-out (signout.aspx)");
+            check(UrlRouter.isSignOut("https://www.office.com/estslogout?ru=x"), "Microsoft 365 start page sign-out");
+            check(UrlRouter.isSignOut("https://teams.microsoft.com/logout"), "Teams sign-out");
+            check(!UrlRouter.isSignOut("https://outlook.office.com/mail/inbox/id/AAQkAGlogoutXYZ"), "a mail id containing the letters is not a sign-out");
+            check(!UrlRouter.isSignOut("https://outlook.office.com/owa/service.svc?action=LogoffOwa"), "parameters are not looked at for Outlook's own pages");
             check(!UrlRouter.isSignOut("https://outlook.office.com/mail/"), "Outlook's inbox is not a sign-out");
             check(!UrlRouter.isSignOut("https://teams.microsoft.com/v2/"), "Teams is not a sign-out");
             check(!UrlRouter.isSignOut("https://example.com/logout"), "another site's sign-out is its own business");
