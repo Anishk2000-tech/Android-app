@@ -1357,8 +1357,18 @@ public final class BrowserTab {
                     com.workdeck.app.EventLog.add(mApp, key + ": sign-in page shown: " + mLoginLogged + " ("
                             + touchText(since(com.workdeck.app.UiState.lastTouchAt)) + ")");
                 } else if (UrlRouter.siteFor(url) == site && mLoginLogged != null) {
-                    mLoginLogged = null;
-                    com.workdeck.app.EventLog.add(mApp, key + ": signed in, " + siteName() + " loaded");
+                    // The site's address after a sign-in page: signed in - if it stays (a site
+                    // that isn't signed in opens for a moment, then goes to the sign-in page).
+                    final int seq = mLoadSeq;
+                    mMain.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (view != mWebView || mWebView == null || seq != mLoadSeq || mLoginLogged == null) return;
+                            if (UrlRouter.siteFor(mWebView.getUrl()) != site) return;
+                            mLoginLogged = null;
+                            com.workdeck.app.EventLog.add(mApp, key + ": signed in, " + siteName() + " is open");
+                        }
+                    }, 25000);
                 }
             }
             changed();
