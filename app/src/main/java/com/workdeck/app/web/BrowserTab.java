@@ -1000,6 +1000,18 @@ public final class BrowserTab {
     /** Teams: the chat list (or another view) is on screen, no conversation's messages. */
     private volatile boolean mConvoHidden;
     private volatile long mReceiptLoggedAt;
+    /** Origin (scheme://host[:port]) of the tab's page, for answers to its requests. */
+    private volatile String mPageOrigin;
+
+    private static String originOf(String url) {
+        try {
+            android.net.Uri u = android.net.Uri.parse(url);
+            if (u.getScheme() == null || u.getHost() == null) return null;
+            return u.getScheme() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
 
     /** The page reports whether a conversation's messages are on screen (Teams only). */
     void setConvoOnScreen(boolean on) {
@@ -1029,13 +1041,18 @@ public final class BrowserTab {
                     + ") - no \"Seen\" for messages nobody saw");
         }
         java.util.Map<String, String> headers = new java.util.HashMap<>();
-        String origin = null;
+        // The page's origin, so the browser accepts the answer (older engines don't pass the
+        // request's Origin header on): the header, else the referrer's, else the tab's page.
+        String origin = null, referer = null;
         java.util.Map<String, String> req = request.getRequestHeaders();
         if (req != null) {
             for (java.util.Map.Entry<String, String> e : req.entrySet()) {
                 if ("origin".equalsIgnoreCase(e.getKey())) origin = e.getValue();
+                else if ("referer".equalsIgnoreCase(e.getKey())) referer = e.getValue();
             }
         }
+        if ((origin == null || origin.isEmpty() || "null".equals(origin)) && referer != null) origin = originOf(referer);
+        if (origin == null || origin.isEmpty() || "null".equals(origin)) origin = mPageOrigin;
         headers.put("Access-Control-Allow-Origin", origin != null ? origin : "https://teams.microsoft.com");
         headers.put("Access-Control-Allow-Credentials", "true");
         headers.put("Cache-Control", "no-store");
@@ -1370,6 +1387,7 @@ public final class BrowserTab {
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             mLoadedAt = SystemClock.elapsedRealtime();
             mError = null;
+            if (view == mWebView && UrlRouter.isHttp(url)) mPageOrigin = originOf(url);
             if (view == mWebView && web == null) {
                 mLoadSeq++;
                 if (UrlRouter.siteFor(url) == site) mLastSiteUrl = url;
@@ -1394,6 +1412,7 @@ public final class BrowserTab {
                     && (url.contains("/dl/launcher") || url.contains("/l/meetup-join") || url.contains("/l/"))) {
                 chooseWebAppOnLauncher(0);
             }
+            if (view == mWebView && UrlRouter.isHttp(url)) mPageOrigin = originOf(url);
             if (view == mWebView && web == null) {
                 if (!UrlRouter.isHttp(url) || UrlRouter.siteFor(url) == site) Log.i(TAG, key + ": page finished " + url);
                 scheduleErrorCheck(view, url, 0);

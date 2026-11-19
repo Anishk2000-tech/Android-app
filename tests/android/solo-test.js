@@ -261,7 +261,9 @@ async function messagesAndReceipts(key, p) {
   const held = await p.eval(receipt, 15000);
   const heldLog = sh('adb logcat -d -s WorkDeck/Events');
   check(`${app.name}: Teams' read receipt is kept back while the app isn't on screen (no "Seen")`,
-    /^200:application\/json/.test(String(held)) && /kept Teams' read receipt back \(not on screen\)/.test(heldLog), String(held));
+    /^200:application\/json/.test(String(held)) && /kept Teams' read receipt back \(not on screen\)/.test(heldLog),
+    String(held) + ' || top: ' + topPackage() + ' || log: ' + heldLog.split('\n').filter((l) => /WorkDeck\/Events/.test(l))
+      .map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).slice(-4).join(' | '));
   // Back in front (the user interacting - a key press, nothing on the page is tapped), the
   // Teams tab showing no chat list: it goes through to Teams.
   sh(`adb shell am start -W -n ${app.pkg}/${MAIN}`);
