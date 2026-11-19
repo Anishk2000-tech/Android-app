@@ -203,6 +203,18 @@ public final class UrlRouter {
         return false;
     }
 
+    /**
+     * Teams' "this chat is read" request - its read receipt, "Seen" for the sender: the chat
+     * service's consumption-horizon property of a conversation
+     * (.../conversations/{id}/properties?name=consumptionhorizon).
+     */
+    public static boolean isReadReceipt(String method, String url) {
+        if (method == null || !isHttp(url) || !isTeams(url)) return false;
+        String m = method.toUpperCase(Locale.ROOT);
+        if (!m.equals("PUT") && !m.equals("POST")) return false;
+        return url.toLowerCase(Locale.ROOT).contains("consumptionhorizon");
+    }
+
     private static final java.util.regex.Pattern SIGN_OUT_PART = java.util.regex.Pattern.compile(
             "^(ests)?(logoff|logout|signout|sign-out)([._-][a-z0-9._-]*)?$");
 

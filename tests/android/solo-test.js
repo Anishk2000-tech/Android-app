@@ -231,6 +231,49 @@ async function calls(key, p) {
   check(`${app.name}: the call-audio button goes away after the call`, !/Call audio: tap to choose/.test(after));
 }
 
+// A chat message that says "call" must never ring; Teams' real incoming call does.
+// Teams' read receipt ("Seen") is kept back while nobody can be reading.
+async function messagesAndReceipts(key, p) {
+  const app = APPS[key];
+  const mine = () => sh('adb shell dumpsys notification --noredact').split('NotificationRecord').filter((r) => r.includes('pkg=' + app.pkg));
+  const callAlert = (who) => mine().some((r) => r.includes(who) && r.includes('channel=calls'));
+  sh('adb shell input keyevent KEYCODE_HOME');
+  await sleep(2500);
+  sh('adb logcat -c');
+  // Teams marks chat notifications "requireInteraction"; the old rule rang for any "call" then.
+  await p.eval(`['call', 'Call me', 'Can you call me later?', 'Missed call from Bob', 'calling you in 5 min']
+      .forEach((t, i) => new Notification('CI Chatter ' + i, { body: t, requireInteraction: true, tag: 'ci-chat-' + i })), 'ok'`, 8000);
+  await sleep(5000);
+  const rang = mine().filter((r) => r.includes('CI Chatter') && r.includes('channel=calls')).length;
+  const asMessages = mine().filter((r) => r.includes('CI Chatter') && r.includes('channel=teams_messages')).length;
+  check(`${app.name}: chat messages that mention a call ("call", "Call me", "Missed call from ...") don't ring`, rang === 0 && asMessages === 5,
+    'rang ' + rang + ', shown as messages ' + asMessages);
+  await p.eval(`window.__ciRealCall = new Notification('CI Real Caller', { body: 'Incoming call', requireInteraction: true }), 'ok'`, 8000);
+  const rings = await waitFor(() => callAlert('CI Real Caller'), 10000);
+  check(`${app.name}: a real incoming call still rings`, rings);
+  await p.eval(`window.__ciRealCall.close(), 'ok'`, 8000);
+  await waitFor(() => !callAlert('CI Real Caller'), 8000);
+
+  // Read receipt while WorkDeck isn't on screen: kept back (answered here, never sent).
+  const receipt = `fetch('https://teams.microsoft.com/api/chatsvc/emea/v1/users/ME/conversations/19%3Aci%40unq.gbl.spaces/properties?name=consumptionhorizon',
+      { method: 'POST', body: '{"consumptionhorizon":"1;2;3"}', credentials: 'include' })
+      .then((r) => r.status + ':' + r.headers.get('content-type')).catch((e) => 'error ' + e)`;
+  const held = await p.eval(receipt, 15000);
+  const heldLog = sh('adb logcat -d -s WorkDeck/Events');
+  check(`${app.name}: Teams' read receipt is kept back while the app isn't on screen (no "Seen")`,
+    /^200:application\/json/.test(String(held)) && /kept Teams' read receipt back \(not on screen\)/.test(heldLog), String(held));
+  // Back in front (the user interacting - a key press, nothing on the page is tapped), the
+  // Teams tab showing no chat list: it goes through to Teams.
+  sh(`adb shell am start -W -n ${app.pkg}/${MAIN}`);
+  await sleep(3000);
+  sh('adb shell input keyevent KEYCODE_SHIFT_LEFT');
+  await sleep(800);
+  sh('adb logcat -c');
+  const passed = await p.eval(receipt, 15000);
+  check(`${app.name}: ...and goes through while the user looks at the app`, !/kept Teams' read receipt back/.test(sh('adb logcat -d -s WorkDeck/Events')),
+    String(passed));
+}
+
 async function links(key, p) {
   const app = APPS[key];
   const click = (url) => `(() => { const a = document.createElement('a'); a.href = '${url}'; a.target = '_blank'; a.rel = 'noopener';
@@ -393,6 +436,7 @@ async function signOut(key, p) {
   await textSize('omcTeams');
   if (p) {
     await calls('omcTeams', p);
+    await messagesAndReceipts('omcTeams', p);
     await links('omcTeams', p);
     await selfHeal(p);
     await siblingLink(p);

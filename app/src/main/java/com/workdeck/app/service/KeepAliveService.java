@@ -241,9 +241,13 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
                     .setShowWhen(true)
                     .setCategory(Notification.CATEGORY_CALL);
             int added = 0;
-            List<CallManager.Route> routes = call.availableRoutes();
+            List<CallManager.Route> routes = new java.util.ArrayList<>(call.availableRoutes());
+            // On a Bluetooth headset, its other way (listen only / listen and talk) comes first.
+            for (CallManager.Route bt : new CallManager.Route[] {CallManager.Route.BT_PHONE_MIC, CallManager.Route.BLUETOOTH}) {
+                if (routes.remove(bt)) routes.add(0, bt);
+            }
             for (CallManager.Route option : routes) {
-                if (option == r || added >= 2) continue;
+                if (option == r || added >= 3) continue;
                 Intent i = new Intent(this, ActionReceiver.class).setAction(ActionReceiver.ACTION_ROUTE)
                         .putExtra(ActionReceiver.EXTRA_ROUTE, option.name());
                 PendingIntent pi = PendingIntent.getBroadcast(this, 20 + option.ordinal(), i,
@@ -277,6 +281,7 @@ public final class KeepAliveService extends Service implements BrowserTab.Listen
         switch (r) {
             case EARPIECE: return getString(R.string.route_earpiece);
             case BLUETOOTH: return getString(R.string.route_bluetooth);
+            case BT_PHONE_MIC: return getString(R.string.route_bt_phone_mic);
             case WIRED: return getString(R.string.route_wired);
             default: return getString(R.string.route_speaker);
         }

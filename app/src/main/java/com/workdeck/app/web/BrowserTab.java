@@ -995,6 +995,54 @@ public final class BrowserTab {
 
     // ------------------------------------------------------------------ sign-outs nobody asked for
 
+    // ------------------------------------------------------------------ read receipts (Teams)
+
+    /** Teams: the chat list (or another view) is on screen, no conversation's messages. */
+    private volatile boolean mConvoHidden;
+    private volatile long mReceiptLoggedAt;
+
+    /** The page reports whether a conversation's messages are on screen (Teams only). */
+    void setConvoOnScreen(boolean on) {
+        mConvoHidden = !on;
+    }
+
+    /**
+     * Teams marks a chat as read ("Seen" for the sender) with this request. It is kept back
+     * while nobody can be reading: WorkDeck isn't on screen (screen off, locked, another
+     * app), or Teams' chat list is shown and the last-opened chat isn't (Teams treats that
+     * chat as open and would mark its new messages read) - unless the user just tapped
+     * (opening a chat, "Mark as read"). The page is told it is hidden in both cases, so
+     * Teams normally doesn't send it at all; this is the safety net. During a call it
+     * always goes through.
+     */
+    private boolean holdReadReceipt() {
+        if (CallManager.get(mApp).inCall()) return false;
+        if (!com.workdeck.app.UiState.isLookingAt(key)) return true;
+        return mConvoHidden && since(com.workdeck.app.UiState.lastTouchAt) > 1500;
+    }
+
+    private WebResourceResponse readReceiptHeld(WebResourceRequest request) {
+        if (since(mReceiptLoggedAt) > 10000) {
+            mReceiptLoggedAt = SystemClock.elapsedRealtime();
+            com.workdeck.app.EventLog.add(mApp, key + ": kept Teams' read receipt back ("
+                    + (com.workdeck.app.UiState.isLookingAt(key) ? "chat list on screen, not the chat" : "not on screen")
+                    + ") - no \"Seen\" for messages nobody saw");
+        }
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        String origin = null;
+        java.util.Map<String, String> req = request.getRequestHeaders();
+        if (req != null) {
+            for (java.util.Map.Entry<String, String> e : req.entrySet()) {
+                if ("origin".equalsIgnoreCase(e.getKey())) origin = e.getValue();
+            }
+        }
+        headers.put("Access-Control-Allow-Origin", origin != null ? origin : "https://teams.microsoft.com");
+        headers.put("Access-Control-Allow-Credentials", "true");
+        headers.put("Cache-Control", "no-store");
+        return new WebResourceResponse("application/json", "utf-8", 200, "OK", headers,
+                new java.io.ByteArrayInputStream("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
     private String mLoginLogged;
     private volatile long mSignOutAllowedAt;
     private volatile long mSignOutReloadAt;
@@ -1399,6 +1447,9 @@ public final class BrowserTab {
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             String u = request.getUrl().toString();
             if (UrlRouter.isSignOut(u) && refuseSignOut(u, request.isForMainFrame())) return emptyResponse();
+            if (site == Site.TEAMS && web == null && UrlRouter.isReadReceipt(request.getMethod(), u) && holdReadReceipt()) {
+                return readReceiptHeld(request);
+            }
             return SwShim.maybeIntercept(mApp, account.profile, request, cookies());
         }
 
@@ -1644,10 +1695,40 @@ public final class BrowserTab {
                     }
                     return;
                 }
-                request.grant(allowed.toArray(new String[0]));
-                if (allowed.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
-                    CallManager.get(mApp).onMicPossiblyStarted();
+                final String[] grantList = allowed.toArray(new String[0]);
+                if (!allowed.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+                    request.grant(grantList);
+                    return;
                 }
+                final CallManager cm = CallManager.get(mApp);
+                final boolean video = allowed.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE);
+                cm.onMicPossiblyStarted();
+                if (!cm.micNeedsBluetoothLink(video)) {
+                    request.grant(grantList);
+                    return;
+                }
+                // The call goes to the Bluetooth headset and its call link isn't up yet: bring
+                // it up and only then let the engine open the microphone, so the headset's
+                // microphone is recorded (not the phone's). The page usually waited already.
+                cm.prepareMic(video);
+                final long start = SystemClock.elapsedRealtime();
+                mMain.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        long waited = SystemClock.elapsedRealtime() - start;
+                        boolean up = cm.bluetoothLinkUp();
+                        if (!up && waited < CallManager.MIC_WAIT_MAX_MS) {
+                            mMain.postDelayed(this, 100);
+                            return;
+                        }
+                        cm.onMicWaitDone(waited, up);
+                        try {
+                            request.grant(grantList);
+                        } catch (Throwable t) {
+                            Log.w(TAG, "microphone request ended while waiting", t);
+                        }
+                    }
+                }, 100);
             }
         };
         final Runnable withAndroidPerms = new Runnable() {

@@ -31,6 +31,7 @@ const BRIDGE_MOCK = `
   window.__perm = 'granted';
   window.__files = {};
   window.__media = { mic: true, camera: true, cameras: ['front', 'back'], routes: ['speaker', 'earpiece', 'bluetooth'], route: '' };
+  window.__micPolls = 0;
   window.WorkDeckBridge = {
     _rec(name, args) { window.__calls.push({ name: name, args: Array.prototype.slice.call(args) }); },
     permission(t) { this._rec('permission', arguments); return t === '${TOKEN}' ? window.__perm : 'denied'; },
@@ -62,6 +63,10 @@ const BRIDGE_MOCK = `
     },
     callSignal(t, type, detail) { this._rec('callSignal', arguments); },
     log(t, m) { this._rec('log', arguments); },
+    convo(t, st) { this._rec('convo', arguments); },
+    micPrepare(t, video) { this._rec('micPrepare', arguments); return window.__micPrepare || 'ready'; },
+    micReady(t) { this._rec('micReady', arguments); return (window.__micReadyAfter || 0) <= ++window.__micPolls ? '1' : '0'; },
+    micWaited(t, ms, ready) { this._rec('micWaited', arguments); },
   };
 `;
 
@@ -849,7 +854,7 @@ test('a page that is not on screen reports itself hidden and still gets (emulate
   // No real frames are drawn for an off-screen WebView: simulate that.
   await ctx.addInitScript("window.__drawn = '0'; window.requestAnimationFrame = function () { return 7; }; window.cancelAnimationFrame = function () {};");
   await ctx.addInitScript(BRIDGE_MOCK.replace("window.__calls = [];", "window.__calls = []; window.__drawn = '0';"));
-  await ctx.addInitScript(script({}));
+  await ctx.addInitScript(script({ site: 'outlook' }));
   const page = await ctx.newPage();
   await page.goto(base + '/mobile.html');
   const r = await page.evaluate(async () => {
@@ -879,7 +884,8 @@ test('a page that is not on screen reports itself hidden and still gets (emulate
 test('while the user is not looking, Teams cannot tell otherwise: hidden, not focused, nothing "on screen"', async (b, base) => {
   // Teams marks messages as read ("Seen") when it believes the user is looking at the chat.
   PAGES['/chat.html'] = `<!doctype html><html><head><title>Chat | Teams</title></head><body>
-      <div id="m1" style="height:80px">new message</div><div id="m2" style="height:80px">another</div></body></html>`;
+      <div id="m1" style="height:80px">new message</div><div id="m2" style="height:80px">another</div>
+      <div contenteditable="true" aria-label="Type a message" style="height:40px">reply</div></body></html>`;
   const ctx = await b.newContext();
   await ctx.addInitScript(BRIDGE_MOCK.replace("window.__calls = [];", "window.__calls = []; window.__drawn = '0';"));
   await ctx.addInitScript(script({}));
@@ -921,6 +927,176 @@ test('while the user is not looking, Teams cannot tell otherwise: hidden, not fo
   assert.deepStrictEqual(r.left, { focus: false, vis: 'hidden', log: ['focus', 'blur'] }, 'looking away: blur');
   assert.strictEqual(r.isIO, true, 'instanceof IntersectionObserver still holds');
   assert.strictEqual(r.name, 'IntersectionObserver');
+  await ctx.close();
+});
+
+test('Teams chat list: the last-opened chat is not "open" (hidden, unfocused) until a chat is on screen again; the list keeps working', async (b, base) => {
+  // Teams' phone layout: the chat list is drawn over the last-opened conversation, which
+  // Teams keeps selected - its new messages would be marked read ("Seen") right away.
+  PAGES['/teams-list.html'] = `<!doctype html><html><head><title>Chat | Teams</title><style>
+      body{margin:0} #convo,#list{position:absolute;left:0;top:0;width:400px;height:600px} #convo{background:#fff} #list{background:#eee}
+    </style></head><body>
+    <div id="convo"><div data-tid="chat-pane-message" style="height:60px">Alice: hello</div>
+      <div contenteditable="true" aria-label="Type a message" style="height:40px"></div></div>
+    <div id="list"><div id="alice" role="treeitem" aria-selected="true" style="height:50px">Alice</div><div role="treeitem" style="height:50px">Bob</div></div>
+    </body></html>`;
+  const { ctx, page } = await newPage(b, base.replace('127.0.0.1', 'teams.wd-test'), {}, '/teams-list.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const log = [];
+    window.addEventListener('focus', () => log.push('focus'));
+    window.addEventListener('blur', () => log.push('blur'));
+    document.addEventListener('visibilitychange', () => log.push(document.visibilityState));
+    const listSeen = [];
+    new IntersectionObserver((es) => es.forEach((e) => listSeen.push(e.target.id + ':' + e.isIntersecting)))
+      .observe(document.getElementById('alice'));
+    const convoCalls = () => window.__calls.filter((c) => c.name === 'convo').map((c) => c.args[1]);
+    await wait(1400);
+    const onList = { vis: document.visibilityState, focus: document.hasFocus(), convo: convoCalls(), listSeen: listSeen.slice() };
+    // The user opens the chat: the list goes away, the conversation is on screen.
+    document.getElementById('list').style.display = 'none';
+    document.getElementById('convo').click();
+    await wait(600);
+    const inChat = { vis: document.visibilityState, convo: convoCalls(), log: log.slice() };
+    // Back to the list.
+    document.getElementById('list').style.display = '';
+    await wait(1400);
+    const back = { vis: document.visibilityState, focus: document.hasFocus(), convo: convoCalls(), log: log.slice() };
+    return { onList, inChat, back };
+  });
+  assert.deepStrictEqual(r.onList.vis, 'hidden', 'chat list on screen: Teams is told it is hidden');
+  assert.strictEqual(r.onList.focus, false, 'chat list on screen: not focused');
+  assert.deepStrictEqual(r.onList.convo, ['0'], 'WorkDeck is told no chat is on screen');
+  assert.deepStrictEqual(r.onList.listSeen, ['alice:true'], 'the list itself still works (its items are reported on screen)');
+  assert.strictEqual(r.inChat.vis, 'visible', 'a chat on screen: visible again');
+  assert.deepStrictEqual(r.inChat.convo, ['0', '1']);
+  assert.ok(r.inChat.log.indexOf('focus') >= 0, 'a chat on screen: the page gets its focus back');
+  assert.strictEqual(r.back.vis, 'hidden', 'back on the list: hidden again');
+  assert.strictEqual(r.back.focus, false);
+  assert.deepStrictEqual(r.back.convo, ['0', '1', '0']);
+  assert.strictEqual(r.back.log[r.back.log.length - 1], 'blur', 'back on the list: blur');
+  await ctx.close();
+});
+
+test('Teams chat list: no hiding while a call is going on', async (b, base) => {
+  const { ctx, page } = await newPage(b, base.replace('127.0.0.1', 'teams.wd-test'), {}, '/teams-list.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    // A call: a connection sending audio (a synthetic sound; no microphone needed here).
+    const ac = new AudioContext();
+    const osc = ac.createOscillator();
+    const dest = ac.createMediaStreamDestination();
+    osc.connect(dest); osc.start();
+    const a = new RTCPeerConnection(), c = new RTCPeerConnection();
+    a.onicecandidate = (e) => e.candidate && c.addIceCandidate(e.candidate);
+    c.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+    a.addTrack(dest.stream.getAudioTracks()[0], dest.stream);
+    c.addTransceiver('audio', { direction: 'recvonly' });
+    const offer = await a.createOffer(); await a.setLocalDescription(offer); await c.setRemoteDescription(offer);
+    const answer = await c.createAnswer(); await c.setLocalDescription(answer); await a.setRemoteDescription(answer);
+    for (let i = 0; i < 50 && a.connectionState !== 'connected'; i++) await wait(100);
+    await wait(1400);
+    const inCall = document.visibilityState;
+    a.close(); c.close(); osc.stop();
+    await wait(1400);
+    return { inCall, after: document.visibilityState };
+  });
+  assert.strictEqual(r.inCall, 'visible', 'a call is going on: never hidden (the call screen stays live)');
+  assert.strictEqual(r.after, 'hidden', 'call over, chat list on screen: hidden');
+  await ctx.close();
+});
+
+test('Teams chat-list rule stays off on the sign-in page and while joining a meeting', async (b, base) => {
+  // The sign-in page opens in the Teams tab too; it has no message box but must not be hidden.
+  const signIn = await newPage(b, base, {}, '/teams-list.html');
+  await signIn.page.waitForTimeout(1400);
+  const onLogin = await signIn.page.evaluate(() => document.visibilityState);
+  await signIn.ctx.close();
+  const join = await newPage(b, base.replace('127.0.0.1', 'teams.wd-test'), {}, '/teams-list.html?meetingjoin=true#/l/meetup-join/19:abc');
+  await join.page.waitForTimeout(1400);
+  const joining = await join.page.evaluate(() => document.visibilityState);
+  await join.ctx.close();
+  assert.strictEqual(onLogin, 'visible', 'not a Teams address (the sign-in page): never hidden');
+  assert.strictEqual(joining, 'visible', 'joining a meeting: never hidden');
+});
+
+test('a chat message mentioning a call next to some Dismiss button does not ring; Teams\' call box does', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript("Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });");
+  await ctx.addInitScript(BRIDGE_MOCK);
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/teams.html');
+  const r = await page.evaluate(async () => {
+    const tick = () => new Promise((res) => setTimeout(res, 60));
+    const sig = () => window.__calls.filter((c) => c.name === 'callSignal').map((c) => c.args[1]);
+    // An in-page message preview: its label is the message; the box has a Dismiss button.
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'alert');
+    toast.innerHTML = '<div role="button" aria-label="Bob Jones: can you answer my video call later? I will call you at 5"></div>' +
+      '<button aria-label="Dismiss"></button>';
+    document.body.appendChild(toast);
+    await tick();
+    const message = sig().slice();
+    // Accept and Decline in different places (e.g. a meeting card and an unrelated list).
+    const a = document.createElement('section');
+    a.innerHTML = '<div role="region"><button aria-label="Accept call"></button></div>';
+    const d = document.createElement('section');
+    d.innerHTML = '<div role="region"><button aria-label="Decline"></button></div>';
+    document.body.appendChild(a); document.body.appendChild(d);
+    await tick();
+    const apart = sig().slice();
+    a.remove(); d.remove(); toast.remove();
+    const call = document.createElement('div');
+    call.setAttribute('role', 'dialog');
+    call.innerHTML = '<div>Bob Jones</div><button aria-label="Accept audio call"></button><button aria-label="Decline call"></button>';
+    document.body.appendChild(call);
+    await tick();
+    return { message, apart, call: sig() };
+  });
+  assert.deepStrictEqual(r.message, [], 'a message preview that talks about calls: no ringing');
+  assert.deepStrictEqual(r.apart, [], 'Accept and Decline in different boxes: no ringing');
+  assert.deepStrictEqual(r.call, ['ringing_ui'], "Teams' call box rings");
+  await ctx.close();
+});
+
+test('the microphone waits for the Bluetooth call link before it opens (at most 2.5 s), then stays open for the call', async (b, base) => {
+  const ctx = await b.newContext();
+  await ctx.addInitScript(BRIDGE_MOCK.replace("window.__micPolls = 0;", "window.__micPolls = 0; window.__micPrepare = 'wait'; window.__micReadyAfter = 4;"));
+  await ctx.addInitScript(script({}));
+  const page = await ctx.newPage();
+  await page.goto(base + '/mobile.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const t0 = Date.now();
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const waited = Date.now() - t0;
+    const order = window.__calls.map((c) => c.name).filter((n) => /^mic|mediaDelta/.test(n));
+    const waitedCall = window.__calls.find((c) => c.name === 'micWaited');
+    const kept = window.__wdMicKept();
+    // Teams closes its microphone (no call connection): the spare copy goes 3 s later.
+    s.getTracks().forEach((t) => t.stop());
+    await wait(1500);
+    const keptShortly = window.__wdMicKept();
+    await wait(3000);
+    const keptLater = window.__wdMicKept();
+    // Released at once when the call ends (WorkDeck tells the page).
+    const s2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const kept2 = window.__wdMicKept();
+    window.__wdMicKeeperRelease();
+    const released = window.__wdMicKept();
+    s2.getTracks().forEach((t) => t.stop());
+    return { waited, order, waitedReady: waitedCall && waitedCall.args[2], kept, keptShortly, keptLater, kept2, released };
+  });
+  assert.ok(r.waited >= 300, 'getUserMedia waited for the link: ' + r.waited + ' ms');
+  assert.deepStrictEqual(r.order.slice(0, 2), ['micPrepare', 'micReady']);
+  assert.ok(r.order.indexOf('micWaited') < r.order.indexOf('mediaDelta'), 'the microphone opened only after the wait');
+  assert.strictEqual(r.waitedReady, '1', 'it waited until the link was up');
+  assert.strictEqual(r.kept, true, 'a spare copy of the microphone stays open while it is in use');
+  assert.strictEqual(r.keptShortly, true, 'Teams closing its microphone does not drop it at once (re-opening is common)');
+  assert.strictEqual(r.keptLater, false, '3 s without microphone or call: let go');
+  assert.strictEqual(r.kept2, true);
+  assert.strictEqual(r.released, false, 'released at once when the call ends');
   await ctx.close();
 });
 
@@ -999,7 +1175,7 @@ test('company sign-in policy pages ("You must use Microsoft Edge") are recognise
   const srv = await startServer();
   const base = 'http://127.0.0.1:' + srv.address().port;
   const browser = await chromium.launch({
-    args: ['--host-resolver-rules=MAP outlook.wd-test 127.0.0.1', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+    args: ['--host-resolver-rules=MAP outlook.wd-test 127.0.0.1, MAP teams.wd-test 127.0.0.1', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   let failed = 0;
   for (const t of tests) {

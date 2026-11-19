@@ -53,6 +53,11 @@
     <string name="route_earpiece">Phone (earpiece)</string>
     <string name="route_bluetooth">Bluetooth</string>
     <string name="route_wired">Headset</string>
+    <string name="route_bt_phone_mic">Bluetooth sound, phone microphone</string>
+    <string name="route_bluetooth_both">Bluetooth headset (listen and talk)</string>
+    <string name="route_bluetooth_named">%1$s: listen and talk</string>
+    <string name="route_bt_phone_mic_named">%1$s: listen only, talk into the phone</string>
+    <string name="bt_mic_fallback">The Bluetooth headset\'s microphone kept cutting out. You now talk into the phone and still hear the call in the headset. Tap the call-audio button to change this.</string>
     <string name="route_auto">Automatic</string>
 
     <!-- Web permissions / links / downloads -->
@@ -333,6 +338,7 @@
     <string name="route_speaker_short">Speaker</string>
     <string name="route_bluetooth_short">Bluetooth</string>
     <string name="route_wired_short">Headset</string>
+    <string name="route_bt_phone_mic_short">BT + phone mic</string>
     <string name="solo_setup_start">Start %1$s</string>
     <string name="solo_service_title">%1$s %2$s is connected</string>
     <string name="solo_open_sibling_missing">Install the %1$s %2$s app to open this there. Opening it here instead.</string>

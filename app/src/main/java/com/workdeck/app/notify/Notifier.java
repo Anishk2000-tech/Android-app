@@ -165,9 +165,16 @@ public final class Notifier {
         Site site = tab.site;
         Prefs prefs = Prefs.get(mApp);
         if (!tab.account.notificationsEnabled(site)) return;
-        boolean isCall = site == Site.TEAMS && CallHeuristics.looksLikeIncomingCall(title, body, requireInteraction);
-        if (isCall && prefs.callAlerts()) {
+        String callPart = site == Site.TEAMS ? CallHeuristics.matchedTemplate(title, body) : null;
+        if (callPart != null && prefs.callAlerts()) {
+            if (UiState.isLookingAt(tab.key)) {
+                // Teams shows (and rings) its own call screen right in front of the user.
+                Log.i(TAG, tab.key + ": incoming-call notification while Teams is on screen: no extra ringing");
+                return;
+            }
             Log.i(TAG, tab.key + ": incoming-call notification -> call alert");
+            com.workdeck.app.EventLog.add(mApp, tab.key + ": ringing - Teams' notification is a call (its " + callPart
+                    + " is a call template)");
             showCallAlert(tab, jsId, title, body);
             return;
         }
@@ -458,6 +465,7 @@ public final class Notifier {
         if (mCallAlertKey != null) return; // already ringing for this call
         String title = who == null || who.trim().isEmpty() ? mApp.getString(R.string.incoming_call) : who.trim();
         Log.i(TAG, "incoming call screen detected");
+        com.workdeck.app.EventLog.add(mApp, tab.key + ": ringing - Teams shows its call screen (Accept / Decline)");
         showCallAlert(tab, "ui", title, mApp.getString(R.string.incoming_call_text));
     }
 
@@ -509,6 +517,7 @@ public final class Notifier {
         if (tab.site != Site.TEAMS || !Prefs.get(mApp).callAlerts()) return;
         if (UiState.isLookingAt(tab.key)) return;
         if (SystemClock.elapsedRealtime() - mLastRingAlert < 30000) return;
+        com.workdeck.app.EventLog.add(mApp, tab.key + ": ringing - Teams plays its ringtone");
         showCallAlert(tab, "", mApp.getString(R.string.incoming_call), mApp.getString(R.string.incoming_call_text));
     }
 

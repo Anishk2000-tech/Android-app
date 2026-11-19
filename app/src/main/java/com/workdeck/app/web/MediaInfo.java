@@ -58,7 +58,10 @@ final class MediaInfo {
             for (String cam : cameras(c)) cams.put(cam);
             o.put("cameras", cams);
             JSONArray routes = new JSONArray();
-            for (CallManager.Route r : CallManager.get(c).availableRoutes()) routes.put(r.name().toLowerCase(Locale.ROOT));
+            for (CallManager.Route r : CallManager.get(c).availableRoutes()) {
+                // "Bluetooth sound, phone microphone" is chosen on the phone, not a speaker for Teams.
+                if (r != CallManager.Route.BT_PHONE_MIC) routes.put(r.name().toLowerCase(Locale.ROOT));
+            }
             o.put("routes", routes);
             String bt = CallManager.get(c).bluetoothName();
             if (bt != null) o.put("btName", bt);

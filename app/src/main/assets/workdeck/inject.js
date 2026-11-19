@@ -63,6 +63,13 @@
   // with timers while the page isn't drawn.
   var drawnCache = false, drawnAt = 0, drawnPushed = false, drawnKnown = false;
   var onDrawnChange = null;
+  // Teams: the user looks at the chat list (or another view) and the last-opened chat is
+  // not on screen. Teams still treats that chat as open and marks its new messages read
+  // ("Seen") while it believes it is visible and focused - so then it is told it isn't.
+  var listView = false;
+  var listCheck = null;
+  // Microphone/camera tracks the page holds, call connections, incoming-call screen.
+  var ownAudio = new Set(), ownVideo = new Set(), rtcLive = 0, ringingUi = false;
   var isDrawn = function () {
     if (!drawnPushed) {
       var now = Date.now();
@@ -79,6 +86,23 @@
     }
     return drawnCache;
   };
+  // What the page is told: visible and focused only while the user looks at it - and, in
+  // Teams, at a conversation (not the chat list). IntersectionObserver and animation frames
+  // follow isDrawn() only: the list must keep working normally while the user scrolls it.
+  var isShown = function () { return isDrawn() && !listView; };
+  var shownState = false;
+  var realFocus = null;
+  var updateShown = function () {
+    var now = isShown();
+    if (now === shownState) return;
+    shownState = now;
+    try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
+    if (now) {
+      if (realFocus && realFocus()) { try { window.dispatchEvent(new FocusEvent('focus')); } catch (e) {} }
+    } else {
+      try { window.dispatchEvent(new FocusEvent('blur')); } catch (e) {}
+    }
+  };
   var pendingFrames = {};
   var armFrameFallbacks = function () {
     Object.keys(pendingFrames).forEach(function (id) {
@@ -90,25 +114,25 @@
     var visDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
     var hidDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
     if (visDesc && visDesc.get && hidDesc && hidDesc.get) {
-      getter(Document.prototype, 'visibilityState', function () { return isDrawn() ? visDesc.get.call(this) : 'hidden'; });
-      getter(Document.prototype, 'hidden', function () { return isDrawn() ? hidDesc.get.call(this) : true; });
+      getter(Document.prototype, 'visibilityState', function () { return isShown() ? visDesc.get.call(this) : 'hidden'; });
+      getter(Document.prototype, 'hidden', function () { return isShown() ? hidDesc.get.call(this) : true; });
     }
   } catch (e) {}
 
   // Focus: only while the user is looking. Window "focus" events that arrive while not
   // looking are held back (this listener runs before the page's own) and replayed later.
   var nativeHasFocus = Document.prototype.hasFocus;
-  var realFocus = function () {
+  realFocus = function () {
     try { return typeof nativeHasFocus === 'function' && !!nativeHasFocus.call(document); } catch (e) { return false; }
   };
   if (typeof nativeHasFocus === 'function') {
     hidden(Document.prototype, 'hasFocus', function hasFocus() {
-      return isDrawn() && nativeHasFocus.call(this);
+      return isShown() && nativeHasFocus.call(this);
     });
   }
   try {
     window.addEventListener('focus', function (e) {
-      if (e.target === window && !isDrawn()) e.stopImmediatePropagation();
+      if (e.target === window && !isShown()) e.stopImmediatePropagation();
     }, true);
   } catch (e) {}
 
@@ -178,14 +202,14 @@
   } catch (e) {}
 
   onDrawnChange = function (on) {
-    try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
     if (on) {
       resyncObservers();
-      if (realFocus()) { try { window.dispatchEvent(new FocusEvent('focus')); } catch (e) {} }
+      // Looking again: is it a conversation or the chat list? (Teams; before telling the page.)
+      if (listCheck) listCheck(true);
     } else {
       armFrameFallbacks();
-      try { window.dispatchEvent(new FocusEvent('blur')); } catch (e) {}
     }
+    updateShown();
   };
   if (isTop) {
     hidden(window, '__wdDrawn', function (on) {
@@ -721,12 +745,14 @@
   if (navigator.mediaDevices && typeof MediaDevices !== 'undefined' && MediaDevices.prototype.getUserMedia) {
     var origGUM = MediaDevices.prototype.getUserMedia;
     var origEnum = MediaDevices.prototype.enumerateDevices;
+    var nativeClone = typeof MediaStreamTrack !== 'undefined' ? MediaStreamTrack.prototype.clone : null;
     var track = function (t) {
       if (!t || t.__wdTracked || t.kind !== 'audio') return;
       hidden(t, '__wdTracked', true);
+      ownAudio.add(t);
       call('mediaDelta', 1);
       var ended = false;
-      var end = function () { if (ended) return; ended = true; call('mediaDelta', -1); };
+      var end = function () { if (ended) return; ended = true; ownAudio.delete(t); call('mediaDelta', -1); };
       try { t.addEventListener('ended', end); } catch (e) {}
       var origStop = t.stop;
       hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
@@ -735,9 +761,10 @@
     var trackVideo = function (t) {
       if (!t || t.__wdVideo || t.kind !== 'video') return;
       hidden(t, '__wdVideo', true);
+      ownVideo.add(t);
       call('videoDelta', 1);
       var ended = false;
-      var end = function () { if (ended) return; ended = true; call('videoDelta', -1); };
+      var end = function () { if (ended) return; ended = true; ownVideo.delete(t); call('videoDelta', -1); };
       try { t.addEventListener('ended', end); } catch (e) {}
       var origStop = t.stop;
       hidden(t, 'stop', function () { end(); return origStop.apply(this, arguments); });
@@ -748,6 +775,78 @@
       hidden(t, 'getSettings', function () { var s = orig.apply(this, arguments) || {}; s.deviceId = id; return s; });
       if (label) { try { Object.defineProperty(t, 'label', { value: label, configurable: true, enumerable: true }); } catch (e) {} }
     };
+    // The call goes to a Bluetooth headset: Android records from it only if its call link
+    // is up before the microphone starts (otherwise the phone's own microphone may be
+    // recorded while the sound plays in the headset - the voice "breaks up" for the other
+    // person). So the microphone waits for the link (at most 2.5 s).
+    // Bluetooth sound with the phone's microphone ("phone"): the engine's own microphone
+    // list names the phone's microphone "Headset earpiece" / "Speakerphone"; asking for it
+    // keeps the engine from switching the headset to its call profile first.
+    var phoneMicId = function () {
+      if (!origEnum) return Promise.resolve(null);
+      return origEnum.call(navigator.mediaDevices).then(function (list) {
+        var pick = null;
+        (list || []).forEach(function (d) {
+          if (d.kind !== 'audioinput' || !d.deviceId) return;
+          if (/^headset earpiece$/i.test(d.label)) pick = d.deviceId;
+          else if (!pick && /^speakerphone$/i.test(d.label)) pick = d.deviceId;
+        });
+        return pick;
+      }, function () { return null; });
+    };
+    var waitForMicRoute = function (constraints, fixed) {
+      if (!constraints || !constraints.audio) return Promise.resolve();
+      var st = call('micPrepare', constraints.video ? '1' : '0');
+      if (st === 'phone') {
+        return phoneMicId().then(function (id) {
+          if (!id || !fixed || !fixed.audio) return;
+          if (fixed.audio === true) fixed.audio = {};
+          if (typeof fixed.audio === 'object') fixed.audio.deviceId = { exact: id };
+        });
+      }
+      if (st !== 'wait') return Promise.resolve();
+      var started = Date.now();
+      return new Promise(function (resolve) {
+        var poll = function () {
+          var ready = call('micReady') === '1';
+          var waited = Date.now() - started;
+          if (ready || waited >= 2500) { call('micWaited', waited, ready ? '1' : '0'); resolve(); return; }
+          setTimeout(poll, 100);
+        };
+        setTimeout(poll, 100);
+      });
+    };
+    // While a call goes on, a spare copy of the microphone stays open. Teams sometimes
+    // closes its microphone and opens a new one (joining, devices changing); with nothing
+    // left open, the engine would end call mode and drop the Bluetooth headset's call link
+    // in between - a gap or a broken-up voice for the other person each time. The copy is
+    // let go 3 s after Teams has no microphone and no call left (or when the call ends).
+    var keeper = null, keeperIdle = 0, keeperTimer = 0;
+    var releaseKeeper = function () {
+      if (keeper) { try { keeper.stop(); } catch (e) {} keeper = null; }
+      if (keeperTimer) { clearInterval(keeperTimer); keeperTimer = 0; }
+      keeperIdle = 0;
+    };
+    var checkKeeper = function () {
+      var live = false;
+      ownAudio.forEach(function (t) { if (t.readyState === 'live') live = true; });
+      if (live || rtcLive > 0) { keeperIdle = 0; return; }
+      if (++keeperIdle >= 3) releaseKeeper();
+    };
+    var keepMic = function (t) {
+      if (!nativeClone || !t || t.kind !== 'audio' || t.readyState !== 'live') return;
+      var old = keeper;
+      try { keeper = nativeClone.call(t); } catch (e) { return; }
+      hidden(keeper, '__wdKeeper', true);
+      keeperIdle = 0;
+      // The previous copy goes once the new microphone runs (never nothing open in between).
+      if (old) setTimeout(function () { try { old.stop(); } catch (e) {} }, 2000);
+      if (!keeperTimer) keeperTimer = setInterval(checkKeeper, 1000);
+    };
+    try { window.addEventListener('pagehide', releaseKeeper); } catch (e) {}
+    hidden(window, '__wdMicKeeperRelease', releaseKeeper);
+    hidden(window, '__wdMicKept', function () { return !!keeper && keeper.readyState === 'live'; });
+
     hidden(MediaDevices.prototype, 'getUserMedia', function (constraints) {
       var self = this;
       var fixed = fixConstraints(constraints);
@@ -755,18 +854,21 @@
       var videoId = constraints && constraints.video && idOf(constraints.video.deviceId);
       // Teams picked one of our microphones: route Android call audio to that device.
       if (audioId && MIC_IDS[audioId]) call('setMic', MIC_IDS[audioId]);
-      return origGUM.call(self, fixed).catch(function (err) {
-        // Constraints a phone can't meet (resolution, frame rate, stale ids): retry relaxed.
-        var name = err && err.name || '';
-        if (!/Overconstrained|NotFound|NotReadable|Constraint/i.test(name) || !fixed) throw err;
-        var relaxed = {};
-        if (fixed.audio) relaxed.audio = true;
-        if (fixed.video) relaxed.video = (fixed.video && fixed.video.facingMode) ? { facingMode: fixed.video.facingMode } : true;
-        return origGUM.call(self, relaxed);
+      return waitForMicRoute(constraints, fixed).then(function () {
+        return origGUM.call(self, fixed).catch(function (err) {
+          // Constraints a phone can't meet (resolution, frame rate, stale ids): retry relaxed.
+          var name = err && err.name || '';
+          if (!/Overconstrained|NotFound|NotReadable|Constraint/i.test(name) || !fixed) throw err;
+          var relaxed = {};
+          if (fixed.audio) relaxed.audio = true;
+          if (fixed.video) relaxed.video = (fixed.video && fixed.video.facingMode) ? { facingMode: fixed.video.facingMode } : true;
+          return origGUM.call(self, relaxed);
+        });
       }).then(function (stream) {
         try {
           stream.getAudioTracks().forEach(function (t) {
             track(t);
+            keepMic(t);
             var aid = audioId && isOurId(audioId) ? audioId : 'default';
             if (isOurId(audioId || 'default')) reportId(t, aid || 'default', micLabel(aid, mediaInfo()));
           });
@@ -819,9 +921,11 @@
         // 'disconnected' is usually a short network blip: the call goes on until failed/closed.
         if (!counted && (st === 'connected' || st === 'completed') && sendsAudio(pc)) {
           counted = true;
+          rtcLive++;
           call('rtcDelta', 1);
         } else if (counted && (st === 'failed' || st === 'closed')) {
           counted = false;
+          rtcLive = Math.max(0, rtcLive - 1);
           call('rtcDelta', -1);
         }
       };
@@ -833,7 +937,7 @@
       if (typeof origClose === 'function') {
         hidden(pc, 'close', function () {
           var r = origClose.apply(this, arguments);
-          if (counted) { counted = false; call('rtcDelta', -1); }
+          if (counted) { counted = false; rtcLive = Math.max(0, rtcLive - 1); call('rtcDelta', -1); }
           return r;
         });
       }
@@ -880,7 +984,7 @@
     hidden(HTMLMediaElement.prototype, 'play', function () {
       try {
         var src = String(this.currentSrc || this.src || '');
-        if (this.loop && /ring|incoming|call/i.test(src)) call('callSignal', 'ringing', src.slice(0, 200));
+        if (this.loop && /ring|incoming/i.test(src)) call('callSignal', 'ringing', src.slice(0, 200));
       } catch (e) {}
       return origPlay.apply(this, arguments);
     });
@@ -941,13 +1045,24 @@
   // for its call screen and let Android ring. DOM changes are not timer-throttled in
   // hidden pages, so this reacts immediately.
   if (isTop && CFG.site === 'teams' && typeof MutationObserver !== 'undefined') {
-    var ringingUi = false;
+    ringingUi = false;
     var scanQueued = false;
+    // Teams' call screen: a short "Accept (video/audio) call" button and a "Decline" button
+    // in the same call box. A chat message saying "answer my call" (a long label) next to
+    // some "Dismiss" button is not a call.
     var ACCEPT = /\b(accept|answer)\b/i;
-    var DECLINE = /\b(decline|reject|dismiss)\b/i;
-    var CALLISH = /call|audio|video/i;
+    var DECLINE = /\b(decline|reject)\b/i;
+    var CALLISH = /\b(call|audio|video)\b/i;
+    var BUTTONS = 'button[aria-label],button[title],button[data-tid],[role="button"][aria-label]';
     var labelOf = function (el) {
-      return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('data-tid')].join(' ');
+      return [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('data-tid')].join(' ').trim();
+    };
+    var callBoxOf = function (el) {
+      var box = el.closest('[role="dialog"],[role="alertdialog"],[role="alert"],[role="region"],[role="status"]');
+      if (box) return box;
+      box = el;
+      for (var up = 0; up < 4 && box.parentElement; up++) box = box.parentElement;
+      return box;
     };
     var scanCall = function () {
       scanQueued = false;
@@ -955,11 +1070,15 @@
       // don't always report the page as hidden when the app is in the background).
       if (!ringingUi && call('looking') === '1') return;
       var acc = null, dec = null;
-      var btns = document.querySelectorAll('button[aria-label],button[title],button[data-tid],[role="button"][aria-label]');
-      for (var i = 0; i < btns.length; i++) {
+      var btns = document.querySelectorAll(BUTTONS);
+      for (var i = 0; i < btns.length && !dec; i++) {
         var l = labelOf(btns[i]);
-        if (!acc && ACCEPT.test(l) && CALLISH.test(l)) acc = btns[i];
-        else if (!dec && DECLINE.test(l)) dec = btns[i];
+        if (l.length > 60 || !ACCEPT.test(l) || !CALLISH.test(l)) continue;
+        var inBox = callBoxOf(btns[i]).querySelectorAll(BUTTONS);
+        for (var j = 0; j < inBox.length; j++) {
+          var dl = labelOf(inBox[j]);
+          if (dl.length <= 60 && DECLINE.test(dl)) { acc = btns[i]; dec = inBox[j]; break; }
+        }
       }
       var now = !!(acc && dec);
       if (now === ringingUi) return;
@@ -978,6 +1097,88 @@
     };
     if (document.documentElement) startCallWatch(); else document.addEventListener('DOMContentLoaded', startCallWatch);
     document.addEventListener('visibilitychange', queueScan);
+  }
+
+  // ------------------------------------------------------------------ Teams: the chat list
+  // Leaving a chat in Teams' phone-width layout shows the chat list, but Teams keeps that
+  // chat selected (highlighted) and treats it as open: while it believes it is visible and
+  // focused it marks that person's next messages read at once - "Seen" for messages the
+  // user never saw. So while no conversation's messages are on screen (and no call,
+  // microphone or camera is in use), Teams is told it's hidden and not focused, as when the
+  // screen is off. The list itself keeps working (scrolling, loading more, tapping): only
+  // the "is anyone reading?" signals change. WorkDeck also keeps Teams' read receipt back
+  // meanwhile (see BrowserTab.holdReadReceipt).
+  if (isTop && CFG.site === 'teams') {
+    var CONVO_MARKS = '[data-tid="chat-pane-message"],[data-tid="message-pane-list-viewport"],[data-tid="chat-pane-list"],' +
+      '[data-tid="message-pane-layout"],[data-tid="ckeditor"],[data-tid="ckeditor-replyConversation"],[data-tid="channel-pane-message"]';
+    var COMPOSE_LABEL = /message|reply|compose|type|chat|post|nachricht|mensaje|r[\u00e9e]pon/i;
+    var viewW = function () { return window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 0; };
+    var viewH = function () { return window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0; };
+    var seenOnScreen = function (el) {
+      if (!el || !el.isConnected) return false;
+      var r = el.getBoundingClientRect();
+      if (r.width < 24 || r.height < 8) return false;
+      var w = viewW(), h = viewH();
+      if (r.right <= 0 || r.bottom <= 0 || r.left >= w || r.top >= h) return false;
+      var x = Math.max(1, Math.min(w - 2, r.left + Math.min(r.width / 2, 40)));
+      var y = Math.max(1, Math.min(h - 2, r.top + Math.min(r.height / 2, 12)));
+      var top = document.elementFromPoint(x, y);
+      // Covered by something else (the chat list drawn over it) = not on screen.
+      return !!top && (top === el || el.contains(top) || top.contains(el));
+    };
+    var convoOnScreen = function () {
+      var marks = document.querySelectorAll(CONVO_MARKS);
+      for (var i = 0; i < marks.length; i++) if (seenOnScreen(marks[i])) return true;
+      var eds = document.querySelectorAll('[contenteditable="true"],[contenteditable=""],textarea');
+      for (var j = 0; j < eds.length; j++) {
+        var e = eds[j];
+        var lab = (e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('placeholder') || '') + ' ' + (e.getAttribute('data-tid') || '');
+        if (COMPOSE_LABEL.test(lab) && seenOnScreen(e)) return true;
+      }
+      return false;
+    };
+    // Only Teams' own app pages - never the sign-in page (shown in the same tab) - and not
+    // while joining a meeting.
+    // (teams.wd-test: the page tests' stand-in host; not a real domain.)
+    var TEAMS_HOST = /(^|\.)teams\.(microsoft\.com|live\.com|cloud\.microsoft|microsoft\.us|wd-test)$/i;
+    var MEETING = /meetup-join|\/meet\/|pre-?join|meetingjoin|\/l\/call/i;
+    var listApplies = function () {
+      try { return TEAMS_HOST.test(location.hostname) && !MEETING.test(location.href); } catch (e) { return false; }
+    };
+    var mediaInUse = function () {
+      if (rtcLive > 0 || ringingUi) return true;
+      var busy = false;
+      ownAudio.forEach(function (t) { if (t.readyState === 'live') busy = true; });
+      ownVideo.forEach(function (t) { if (t.readyState === 'live') busy = true; });
+      return busy;
+    };
+    var listStreak = 0, listReported = null;
+    var setListView = function (on) {
+      listView = on;
+      listStreak = 0;
+      if (listReported !== on) { listReported = on; call('convo', on ? '0' : '1'); }
+      updateShown();
+    };
+    // immediate: the user just started looking - decide before Teams is told it's visible.
+    listCheck = function (immediate) {
+      if (!isDrawn()) return; // not looking: hidden anyway; the last answer stays until they look
+      var list = listApplies() && !mediaInUse() && !convoOnScreen();
+      if (!list) {
+        listStreak = 0;
+        if (listView || listReported !== false) setListView(false);
+        return;
+      }
+      if (listView) return;
+      if (immediate || ++listStreak >= 2) setListView(true);
+    };
+    setInterval(function () { listCheck(false); }, 500);
+    // Taps change the view (opening a chat, going back to the list): look right after.
+    var afterTap = function () {
+      setTimeout(function () { listCheck(false); }, 350);
+      setTimeout(function () { listCheck(false); }, 900);
+    };
+    try { document.addEventListener('click', afterTap, true); } catch (e) {}
+    try { window.addEventListener('popstate', afterTap); } catch (e) {}
   }
 
   // ------------------------------------------------------------------ Outlook unread mail

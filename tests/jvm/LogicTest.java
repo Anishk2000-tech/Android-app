@@ -86,18 +86,54 @@ public final class LogicTest {
         eq(com.workdeck.app.notify.Loudness.millibels(400), 1204, "400% = +12 dB");
 
         // Incoming-call heuristic
-        check(CallHeuristics.looksLikeIncomingCall("Alice Smith", "Incoming call", false), "\"Incoming call\" is a call");
-        check(CallHeuristics.looksLikeIncomingCall("Bob is calling you", "", false), "\"is calling you\" is a call");
-        check(CallHeuristics.looksLikeIncomingCall("Video call from Carol", "", false), "\"Video call from\" is a call");
-        check(CallHeuristics.looksLikeIncomingCall("Dave", "Teams call", true), "requireInteraction + call is a call");
-        check(!CallHeuristics.looksLikeIncomingCall("Dave", "Can you call me later?", false), "chat mentioning call is not a call");
-        check(!CallHeuristics.looksLikeIncomingCall("Erin", "Lunch?", true), "requireInteraction alone is not a call");
+        check(CallHeuristics.looksLikeIncomingCall("Alice Smith", "Incoming call"), "\"Incoming call\" is a call");
+        check(CallHeuristics.looksLikeIncomingCall("Alice Smith", "Incoming video call"), "\"Incoming video call\" is a call");
+        check(CallHeuristics.looksLikeIncomingCall("Incoming call", "Alice Smith"), "title \"Incoming call\" is a call");
+        check(CallHeuristics.looksLikeIncomingCall("Bob is calling you", ""), "\"is calling you\" is a call");
+        check(CallHeuristics.looksLikeIncomingCall("Teams", "Bob Jones is calling you"), "text \"Bob Jones is calling you\" is a call");
+        check(CallHeuristics.looksLikeIncomingCall("Video call from Carol", ""), "\"Video call from\" (title) is a call");
+        // A chat message never rings, whatever it says about calls and however it is marked.
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "call"), "message \"call\" is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "Call me"), "message \"Call me\" is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "Can you call me later?"), "chat mentioning call is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "calling you in 5 min"), "\"calling you in 5 min\" is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "Teams call"), "message \"Teams call\" is not a call (was: with requireInteraction)");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "I got a call from the office, will be late"), "\"call from\" inside a message is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Dave", "Call from office"), "message \"Call from office\" is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Erin", "Lunch?"), "an ordinary message is not a call");
+        check(!CallHeuristics.looksLikeIncomingCall("Missed call from Bob", ""), "a missed call doesn't ring");
+        check(!CallHeuristics.looksLikeIncomingCall("Team chat", "Call started"), "a call started in a group chat doesn't ring");
+        check(!CallHeuristics.looksLikeIncomingCall("Bob", "Call ended 4m 12s"), "a call summary doesn't ring");
+        eq(CallHeuristics.matchedTemplate("Alice", "Incoming call"), "text", "the matching part is named for the log");
 
         // Call audio: where a call's sound goes (RoutePolicy)
         {
             java.util.List<CallManager.Route> phone = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE);
             java.util.List<CallManager.Route> withBt = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE, CallManager.Route.BLUETOOTH);
             java.util.List<CallManager.Route> withWired = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.WIRED);
+            // A headset with both profiles (call + music), and headphones with music only.
+            java.util.List<CallManager.Route> btBoth = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE,
+                    CallManager.Route.BLUETOOTH, CallManager.Route.BT_PHONE_MIC);
+            java.util.List<CallManager.Route> btMusicOnly = java.util.Arrays.asList(CallManager.Route.SPEAKER, CallManager.Route.EARPIECE,
+                    CallManager.Route.BT_PHONE_MIC);
+            eq(RoutePolicy.auto(btBoth, false, false), CallManager.Route.BLUETOOTH, "Bluetooth headset: listen and talk on it");
+            eq(RoutePolicy.auto(btBoth, false, true), CallManager.Route.BT_PHONE_MIC, "user prefers listening only: Bluetooth sound, phone mic");
+            eq(RoutePolicy.auto(btMusicOnly, false, false), CallManager.Route.BT_PHONE_MIC, "headphones without a call profile: sound there, phone mic");
+            eq(RoutePolicy.auto(phone, false, true), CallManager.Route.EARPIECE, "listen-only preference without Bluetooth: earpiece");
+            eq(RoutePolicy.onDeviceRemoved(CallManager.Route.BLUETOOTH, btMusicOnly, false, false), CallManager.Route.BT_PHONE_MIC,
+                    "headset's call profile gone, music profile still there: keep listening on it");
+            eq(RoutePolicy.onDeviceRemoved(CallManager.Route.BT_PHONE_MIC, phone, false, false), CallManager.Route.EARPIECE,
+                    "headphones gone: earpiece");
+            eq(RoutePolicy.onDeviceAdded(CallManager.Route.EARPIECE, phone, btBoth, true), CallManager.Route.BT_PHONE_MIC,
+                    "headset connects mid-call, listen-only preferred: Bluetooth sound, phone mic");
+            eq(RoutePolicy.onDeviceAdded(CallManager.Route.BT_PHONE_MIC, btMusicOnly, btBoth, false), CallManager.Route.BLUETOOTH,
+                    "the call profile comes up after the music profile: the headset for talking too");
+            eq(RoutePolicy.onVideoStarted(CallManager.Route.BT_PHONE_MIC, false), CallManager.Route.BT_PHONE_MIC, "camera on: listening on Bluetooth stays");
+            eq(RoutePolicy.micToRoute("phone", btBoth, false), CallManager.Route.BT_PHONE_MIC,
+                    "phone microphone picked in Teams with Bluetooth connected: keep listening on Bluetooth");
+            check(!RoutePolicy.leaveHeadsetMic(1, btBoth), "one Bluetooth link drop: stay on the headset");
+            check(RoutePolicy.leaveHeadsetMic(2, btBoth), "the link keeps dropping: leave the headset's microphone");
+            check(!RoutePolicy.leaveHeadsetMic(5, withBt), "no music profile to listen on: stay");
             java.util.List<CallManager.Route> noEarpiece = java.util.Arrays.asList(CallManager.Route.SPEAKER);
             eq(RoutePolicy.auto(phone, false), CallManager.Route.EARPIECE, "voice call: earpiece");
             eq(RoutePolicy.auto(phone, true), CallManager.Route.SPEAKER, "video call: loudspeaker");
@@ -123,6 +159,17 @@ public final class LogicTest {
             eq(RoutePolicy.micToRoute("phone", withBt, true), CallManager.Route.SPEAKER, "phone microphone in a video call = loudspeaker");
             eq(RoutePolicy.micToRoute("default", withBt, false), null, "'Automatic' microphone: no device change");
         }
+
+        // Teams' read receipt ("Seen"): which request it is.
+        check(UrlRouter.isReadReceipt("PUT", "https://emea.ng.msg.teams.microsoft.com/v1/users/ME/conversations/19%3Aabc%40unq.gbl.spaces/properties?name=consumptionhorizon"),
+                "read receipt (chat service)");
+        check(UrlRouter.isReadReceipt("PUT", "https://teams.microsoft.com/api/chatsvc/emea/v1/users/ME/conversations/19%3Aabc%40thread.v2/properties?name=consumptionhorizon"),
+                "read receipt (new Teams address)");
+        check(!UrlRouter.isReadReceipt("GET", "https://teams.microsoft.com/api/chatsvc/emea/v1/users/ME/conversations/x/properties?name=consumptionhorizon"),
+                "reading the read state is not sending one");
+        check(!UrlRouter.isReadReceipt("POST", "https://teams.microsoft.com/api/chatsvc/emea/v1/users/ME/conversations/x/messages"),
+                "sending a message is not a read receipt");
+        check(!UrlRouter.isReadReceipt("PUT", "https://example.com/consumptionhorizon"), "another site's request is its own business");
 
         // Sign-out addresses, and whose sign-out it is.
         {

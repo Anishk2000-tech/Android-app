@@ -693,6 +693,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
                 return n != null ? n : getString(R.string.route_bluetooth_short);
             }
             case WIRED: return getString(R.string.route_wired_short);
+            case BT_PHONE_MIC: return getString(R.string.route_bt_phone_mic_short);
             default: return getString(R.string.route_speaker_short);
         }
     }
@@ -1498,6 +1499,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         } else {
             mLaunchedForCall = false; // opened by the user (launcher, notification, share...)
             mLastInteraction = SystemClock.elapsedRealtime();
+            // Tapping a message's notification opens that chat on purpose: it may be marked read.
+            if (notificationId != null) UiState.lastTouchAt = SystemClock.elapsedRealtime();
         }
         if (ACTION_OPEN_SITE.equals(action) && site != null) {
             showTab(account, site);
@@ -1606,7 +1609,8 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         if (r == null) return R.drawable.ic_speaker;
         switch (r) {
             case EARPIECE: return R.drawable.ic_earpiece;
-            case BLUETOOTH: return R.drawable.ic_bluetooth;
+            case BLUETOOTH:
+            case BT_PHONE_MIC: return R.drawable.ic_bluetooth;
             case WIRED: return R.drawable.ic_headset;
             default: return R.drawable.ic_speaker;
         }
@@ -1617,9 +1621,22 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         switch (r) {
             case EARPIECE: return getString(R.string.route_earpiece);
             case BLUETOOTH: return getString(R.string.route_bluetooth);
+            case BT_PHONE_MIC: return getString(R.string.route_bt_phone_mic);
             case WIRED: return getString(R.string.route_wired);
             default: return getString(R.string.route_speaker);
         }
+    }
+
+    /** The chooser's longer label: what each Bluetooth way means, with the headset's name. */
+    private String routeChoiceLabel(CallManager.Route r) {
+        String bt = mCall.bluetoothName();
+        if (r == CallManager.Route.BLUETOOTH) {
+            return bt != null ? getString(R.string.route_bluetooth_named, bt) : getString(R.string.route_bluetooth_both);
+        }
+        if (r == CallManager.Route.BT_PHONE_MIC) {
+            return bt != null ? getString(R.string.route_bt_phone_mic_named, bt) : getString(R.string.route_bt_phone_mic);
+        }
+        return routeLabel(r);
     }
 
     private void chooseRoute() {
@@ -1627,7 +1644,7 @@ public final class MainActivity extends Activity implements TabHost, CallManager
         String[] labels = new String[routes.size()];
         int checked = -1;
         for (int i = 0; i < routes.size(); i++) {
-            labels[i] = routeLabel(routes.get(i));
+            labels[i] = routeChoiceLabel(routes.get(i));
             if (routes.get(i) == mCall.route()) checked = i;
         }
         new AlertDialog.Builder(this).setTitle(R.string.choose_audio_output)

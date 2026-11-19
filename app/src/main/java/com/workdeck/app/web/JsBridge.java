@@ -271,6 +271,61 @@ final class JsBridge {
         });
     }
 
+    /**
+     * The page is about to open the microphone (getUserMedia). "wait": the call goes to the
+     * Bluetooth headset, whose call link is being brought up - the page waits for
+     * {@link #micReady} before opening it (Android records from the headset only if the
+     * link is up before the microphone starts). "phone": the call plays in the Bluetooth
+     * headset and the user talks into the phone - open the phone's own microphone (so the
+     * engine doesn't switch the headset to its call profile). "ready": open it now.
+     */
+    @JavascriptInterface
+    public String micPrepare(String token, String video) {
+        if (!ok(token)) return "ready";
+        final boolean v = "1".equals(video);
+        final CallManager cm = CallManager.get(mApp);
+        if (cm.micIsPhoneWithBluetoothSound(v)) return "phone";
+        if (!cm.micNeedsBluetoothLink(v)) return "ready";
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                cm.prepareMic(v);
+            }
+        });
+        return "wait";
+    }
+
+    /** "1" once the Bluetooth call link is up. */
+    @JavascriptInterface
+    public String micReady(String token) {
+        if (!ok(token)) return "1";
+        return CallManager.get(mApp).bluetoothLinkUp() ? "1" : "0";
+    }
+
+    /** How long the page held its microphone back for the Bluetooth link (activity log). */
+    @JavascriptInterface
+    public void micWaited(String token, String ms, final String ready) {
+        if (!ok(token)) return;
+        final long waited = parseInt(ms, 0);
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                CallManager.get(mApp).onMicWaitDone(waited, "1".equals(ready));
+            }
+        });
+    }
+
+    /**
+     * Teams: "1" while a conversation's messages are on screen, "0" while the chat list
+     * (or another view) is shown and the last-opened chat is not - that chat must then not
+     * count as read.
+     */
+    @JavascriptInterface
+    public void convo(String token, String state) {
+        if (!ok(token)) return;
+        mTab.setConvoOnScreen(!"0".equals(state));
+    }
+
     /** Teams picked one of WorkDeck's microphones (phone / Bluetooth / headset). */
     @JavascriptInterface
     public void setMic(String token, final String mic) {

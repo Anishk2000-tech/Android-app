@@ -18,7 +18,18 @@ WorkDeck is a small Android app (≈160 KB) that runs **Microsoft Teams** and **
 
 ---
 
-## Single-app editions: OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook (1.0.2)
+## Single-app editions: OMC Teams, OMC Outlook, CRAFTWW Teams, CRAFTWW Outlook (1.0.3)
+**1.0.3 (Teams):**
+* **Bluetooth calls: the other person heard the voice breaking up.** On phones the browser engine switches the headset to its call profile right as it opens the microphone; Android records from the headset only if that link is already up when the microphone starts - otherwise it can record the phone's own microphone (in a pocket, on the table) while the sound plays in the headset. Now:
+  * the microphone waits (at most 2.5 s) until the headset's call link is up, then opens - so the headset's microphone is the one recorded;
+  * the microphone stays open for the whole call (a spare copy), so Teams closing and re-opening it can't drop the headset's call link in between;
+  * the link is given time to come up instead of being asked for again and again (that restarted it), and Teams is told about device changes only when its device list really changes;
+  * if the phone's own microphone records anyway, the call is switched over once more so the headset's microphone is used;
+  * new choice in the call-audio button and the call notification: **Bluetooth sound, phone microphone** - the call plays in the headset (its better music profile) and you talk into the phone. If the headset's call link drops twice in two minutes, the call moves there by itself. Once you pick it, later calls start with it; picking the headset again switches back;
+  * every step of a call (devices, link up/down, which microphone records, where the sound plays, Teams re-opening the microphone) goes into the activity log - hold **Reload** in the **Aa** panel to share it after a bad call.
+* **No more ringing for chat messages that say "call".** A message's notification carries what the person wrote; the old check rang for any marked-as-important notification containing "call" (and for "Missed call from..."). Now only Teams' call templates as a whole ring ("Incoming call", "Alice is calling you"), Teams' own call screen with Accept *and* Decline in one box, or its ringtone. The activity log says what made the app ring.
+* **No "Seen" for the last-opened chat while the chat list is shown.** In Teams' phone layout the chat you left stays selected, and Teams treats it as open: its next messages were marked read. Now, while no conversation is on screen (and no call is going on), Teams is told it is hidden and not focused - as when the screen is off - and its read receipt is kept back. Opening a chat (or tapping its notification) marks it read as usual.
+
 **1.0.2:** Outlook signed the account out by itself after some time, ending on Microsoft's *"You signed out of your account"* page with nothing to tap. That page is a real sign-out, not an unsupported browser. The usual cause is Microsoft 365's **idle session timeout**, a setting of the company: a web session nobody clicked or typed in for a set time is signed out (Outlook on the web is covered, Teams is not - which is why only Outlook did it). A browser tab is normally closed or asleep long before; these apps keep the page running all day for notifications, so the timeout always arrives. Now:
 * **A sign-out nobody asked for is not carried out.** When the page heads for a sign-out address and you didn't touch the app in the last 45 seconds (or it isn't on screen), the app doesn't go there and loads Outlook again - still signed in, because the sign-in was never ended. Your own **Sign out** works as before.
 * **No dead end:** after a sign-out that was carried out, the app goes back to Outlook's sign-in page by itself.
