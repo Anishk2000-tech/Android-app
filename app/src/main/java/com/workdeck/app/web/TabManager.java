@@ -38,6 +38,8 @@ public final class TabManager {
 
     private final Context mApp;
     private final Map<String, BrowserTab> mTabs = new LinkedHashMap<>();
+    /** The Teams tabs, for the service-worker thread (a copy, replaced whenever tabs change). */
+    private volatile List<BrowserTab> mTeamsTabs = new ArrayList<>();
     private final Set<String> mProfilesReady = new HashSet<>();
     private final List<BrowserTab.Listener> mGlobalListeners = new ArrayList<>();
     private boolean mWebInitialized;
@@ -72,12 +74,36 @@ public final class TabManager {
             swc.setServiceWorkerClient(new ServiceWorkerClient() {
                 @Override
                 public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                    WebResourceResponse held = heldReadReceipt(profile, request);
+                    if (held != null) return held;
                     return SwShim.maybeIntercept(mApp, profile, request, cookies);
                 }
             });
         } catch (Throwable t) {
             Log.w(TAG, "service worker client unavailable for " + profile, t);
         }
+    }
+
+    /**
+     * Teams' service worker sends a read receipt ("Seen") for this profile: kept back like
+     * the page's own (see BrowserTab.holdReadReceipt) - only if every Teams tab of the
+     * profile agrees nobody is reading (the request doesn't say which account it is for).
+     */
+    private WebResourceResponse heldReadReceipt(String profile, WebResourceRequest request) {
+        if (request == null || !UrlRouter.isReadReceipt(request.getMethod(), request.getUrl().toString())) return null;
+        BrowserTab answer = null;
+        for (BrowserTab t : mTeamsTabs) {
+            if (!profile.equals(t.account.profile)) continue;
+            if (!t.holdReadReceipt()) return null;
+            answer = t;
+        }
+        return answer == null ? null : answer.readReceiptHeld(request);
+    }
+
+    private void refreshTeamsTabs() {
+        List<BrowserTab> teams = new ArrayList<>();
+        for (BrowserTab t : mTabs.values()) if (!t.isWeb() && t.site == Site.TEAMS) teams.add(t);
+        mTeamsTabs = teams;
     }
 
     /** The tab for an account's site (object only; the WebView is created on start). */
@@ -92,6 +118,7 @@ public final class TabManager {
             if (mHost != null) t.setHost(mHost);
             for (BrowserTab.Listener l : mGlobalListeners) t.addListener(l);
             mTabs.put(key, t);
+            refreshTeamsTabs();
         }
         return t;
     }
@@ -241,6 +268,7 @@ public final class TabManager {
                 mTabs.remove(t.key);
             }
         }
+        refreshTeamsTabs();
     }
 
     private boolean stillValid(BrowserTab t) {
@@ -255,11 +283,13 @@ public final class TabManager {
             t.destroy();
             mTabs.remove(t.key);
         }
+        refreshTeamsTabs();
     }
 
     public void destroyTab(BrowserTab t) {
         t.destroy();
         mTabs.remove(t.key);
+        refreshTeamsTabs();
     }
 
     public void setHost(TabHost host) {
@@ -308,6 +338,7 @@ public final class TabManager {
         flushCookies();
         for (BrowserTab t : mTabs.values()) t.destroy();
         mTabs.clear();
+        refreshTeamsTabs();
     }
 
     /** Signs one account out: wipes its cookies, storage and cache, then reloads its tabs. */

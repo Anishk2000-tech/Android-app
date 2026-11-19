@@ -1027,13 +1027,13 @@ public final class BrowserTab {
      * Teams normally doesn't send it at all; this is the safety net. During a call it
      * always goes through.
      */
-    private boolean holdReadReceipt() {
+    boolean holdReadReceipt() {
         if (CallManager.get(mApp).inCall()) return false;
         if (!com.workdeck.app.UiState.isLookingAt(key)) return true;
         return mConvoHidden && since(com.workdeck.app.UiState.lastTouchAt) > 1500;
     }
 
-    private WebResourceResponse readReceiptHeld(WebResourceRequest request) {
+    WebResourceResponse readReceiptHeld(WebResourceRequest request) {
         if (since(mReceiptLoggedAt) > 10000) {
             mReceiptLoggedAt = SystemClock.elapsedRealtime();
             com.workdeck.app.EventLog.add(mApp, key + ": kept Teams' read receipt back ("
