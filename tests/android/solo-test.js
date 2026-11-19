@@ -254,26 +254,68 @@ async function messagesAndReceipts(key, p) {
   await p.eval(`window.__ciRealCall.close(), 'ok'`, 8000);
   await waitFor(() => !callAlert('CI Real Caller'), 8000);
 
-  // Read receipt while WorkDeck isn't on screen: kept back (answered here, never sent).
+  // Read receipts ("Seen"), on a stand-in Teams chat page: Teams' real page here is its
+  // sign-in page or, on old engines (Android 12's WebView 91), its "unsupported browser"
+  // page, which may block requests itself.
+  const CHAT = 'https://teams.microsoft.com/wd-ci-receipts';
+  const chatHtml = (withChat) => `<!doctype html><html><head><title>Chat | Microsoft Teams</title></head><body style="margin:0">
+    <div role="tree" aria-label="Chats" style="${withChat ? 'display:none' : ''}">
+      <div role="treeitem" aria-selected="true" style="height:64px">CI Alice</div><div role="treeitem" style="height:64px">CI Bob</div></div>
+    <div id="wdci-${withChat ? 'chat' : 'list'}" style="${withChat ? '' : 'display:none'}">
+      <div data-tid="message-pane-list-viewport" style="height:300px">CI Alice: hello</div>
+      <div data-tid="ckeditor" contenteditable="true" aria-label="Type a message" style="height:80px;border:1px solid #888"></div></div>
+    </body></html>`;
+  const before = String(await p.eval('location.href', 4000));
+  await p.send('Fetch.enable', { patterns: [{ urlPattern: CHAT + '*', requestStage: 'Request' }] });
+  p.on('Fetch.requestPaused', (e) => p.send('Fetch.fulfillRequest', { requestId: e.requestId, responseCode: 200,
+    responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }],
+    body: Buffer.from(chatHtml(!/[?&]list\b/.test(e.request.url))).toString('base64') }));
+  const standIn = async (which) => {
+    await p.send('Page.navigate', { url: CHAT + '?' + which });
+    for (let i = 0; i < 15; i++) {
+      await sleep(1000);
+      const st = String(await p.eval(`location.search + '|' + document.readyState + '|' + !!document.getElementById('wdci-${which === 'list' ? 'list' : 'chat'}')`, 4000));
+      if (st === '?' + which + '|complete|true') return true;
+    }
+    return false;
+  };
   const receipt = `fetch('https://teams.microsoft.com/api/chatsvc/emea/v1/users/ME/conversations/19%3Aci%40unq.gbl.spaces/properties?name=consumptionhorizon',
       { method: 'POST', body: '{"consumptionhorizon":"1;2;3"}', credentials: 'include' })
       .then((r) => r.status + ':' + r.headers.get('content-type')).catch((e) => 'error ' + e)`;
+  const eventLines = () => sh('adb logcat -d -s WorkDeck/Events').split('\n').filter((l) => /WorkDeck\/Events/.test(l))
+    .map((l) => l.replace(/^.*WorkDeck\/Events: /, ''));
+  // 1. WorkDeck isn't on screen (a chat open in the page): kept back (answered here, never sent).
+  const loaded = await standIn('chat');
+  sh('adb logcat -c');
   const held = await p.eval(receipt, 15000);
-  const heldLog = sh('adb logcat -d -s WorkDeck/Events');
+  const heldAt = Date.now();
+  const heldLog = eventLines().join(' | ');
   check(`${app.name}: Teams' read receipt is kept back while the app isn't on screen (no "Seen")`,
-    /^200:application\/json/.test(String(held)) && /kept Teams' read receipt back \(not on screen\)/.test(heldLog),
-    String(held) + ' || top: ' + topPackage() + ' || log: ' + heldLog.split('\n').filter((l) => /WorkDeck\/Events/.test(l))
-      .map((l) => l.replace(/^.*WorkDeck\/Events: /, '')).slice(-4).join(' | '));
-  // Back in front (the user interacting - a key press, nothing on the page is tapped), the
-  // Teams tab showing no chat list: it goes through to Teams.
+    loaded && /^200:application\/json/.test(String(held)) && /kept Teams' read receipt back \(not on screen\)/.test(heldLog),
+    (loaded ? '' : 'stand-in chat not loaded || ') + String(held) + ' || top: ' + topPackage() + ' || log: ' + eventLines().slice(-4).join(' | '));
+  // 2. Back in front (the user interacting - a key press, nothing on the page is tapped), a
+  // chat on screen: it goes through to Teams.
   sh(`adb shell am start -W -n ${app.pkg}/${MAIN}`);
   await sleep(3000);
   sh('adb shell input keyevent KEYCODE_SHIFT_LEFT');
   await sleep(800);
   sh('adb logcat -c');
   const passed = await p.eval(receipt, 15000);
-  check(`${app.name}: ...and goes through while the user looks at the app`, !/kept Teams' read receipt back/.test(sh('adb logcat -d -s WorkDeck/Events')),
+  check(`${app.name}: ...and goes through while the user looks at a chat`, !/kept Teams' read receipt back/.test(eventLines().join('\n')),
     String(passed));
+  // 3. In front, but Teams shows its chat list (in the phone layout the last chat stays
+  // selected and Teams treats it as open): a new message must not be "Seen" - kept back.
+  const listLoaded = await standIn('list');
+  await sleep(Math.max(2500, 11000 - (Date.now() - heldAt))); // the list is recognised; one log line per 10 s
+  sh('adb logcat -c');
+  const onList = await p.eval(receipt, 15000);
+  const listLog = eventLines().join(' | ');
+  check(`${app.name}: ...and is kept back while the chat list is on screen (the last chat stays selected)`,
+    listLoaded && /^200:application\/json/.test(String(onList)) && /kept Teams' read receipt back \(chat list on screen/.test(listLog),
+    (listLoaded ? '' : 'stand-in list not loaded || ') + String(onList) + ' || top: ' + topPackage() + ' || log: ' + eventLines().slice(-4).join(' | '));
+  await p.send('Fetch.disable');
+  if (/^https:/.test(before)) await p.send('Page.navigate', { url: before });
+  await sleep(3000);
 }
 
 async function links(key, p) {
