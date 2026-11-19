@@ -778,7 +778,8 @@
     // The call goes to a Bluetooth headset: Android records from it only if its call link
     // is up before the microphone starts (otherwise the phone's own microphone may be
     // recorded while the sound plays in the headset - the voice "breaks up" for the other
-    // person). So the microphone waits for the link (at most 2.5 s).
+    // person). So the microphone waits for the link (at most 4 s - it can take over 2 s
+    // while the ringtone still plays in the headset).
     // Bluetooth sound with the phone's microphone ("phone"): the engine's own microphone
     // list names the phone's microphone "Headset earpiece" / "Speakerphone"; asking for it
     // keeps the engine from switching the headset to its call profile first.
@@ -810,7 +811,7 @@
         var poll = function () {
           var ready = call('micReady') === '1';
           var waited = Date.now() - started;
-          if (ready || waited >= 2500) { call('micWaited', waited, ready ? '1' : '0'); resolve(); return; }
+          if (ready || waited >= 4000) { call('micWaited', waited, ready ? '1' : '0'); resolve(); return; }
           setTimeout(poll, 100);
         };
         setTimeout(poll, 100);

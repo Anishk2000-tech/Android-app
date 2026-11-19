@@ -66,7 +66,7 @@ public final class CallManager {
     /** The Bluetooth call link gets this long to come up before it is asked for again. */
     private static final long BT_CONNECT_GRACE_MS = 4000;
     /** The page's microphone is held back at most this long while the Bluetooth link comes up. */
-    public static final long MIC_WAIT_MAX_MS = 2500;
+    public static final long MIC_WAIT_MAX_MS = 4000;
     /** Bluetooth link drops counted within this window. */
     private static final long BT_DROP_WINDOW_MS = 120000;
     /** The user prefers Bluetooth for listening only (talking into the phone). */
@@ -130,6 +130,8 @@ public final class CallManager {
     private long mDeliberateBtChangeUntil;
     private boolean mFallbackDone;
     private boolean mNudged;
+    /** This call moved to the phone's microphone because the headset's couldn't be switched on. */
+    private boolean mMicFallbackDone;
     private int mMicReopens, mPutBack, mDropsTotal;
     private String mLastMicDiag, mLastOutDiag, mDevicesSig;
 
@@ -214,6 +216,11 @@ public final class CallManager {
             prepareCallAudio();
             if (mInCall && ++mMicReopens <= 10) {
                 EventLog.add(mApp, "call audio: Teams opened the microphone again (" + mMicReopens + ")");
+            }
+            if (mInCall) {
+                // Look again which microphone records once it runs.
+                mMain.removeCallbacks(mDiagnose);
+                mMain.postDelayed(mDiagnose, 3500);
             }
         }
         startPolling();
@@ -504,6 +511,7 @@ public final class CallManager {
             mScoDrops.clear();
             mFallbackDone = false;
             mNudged = false;
+            mMicFallbackDone = false;
             mMicReopens = 0;
             mPutBack = 0;
             mDropsTotal = 0;
@@ -1046,7 +1054,7 @@ public final class CallManager {
             mLastMicDiag = d;
             EventLog.add(mApp, "call audio: microphone " + d);
         }
-        if (mNudged || mRoute != Route.BLUETOOTH || configs == null || configs.size() != 1 || !bluetoothLinkUp()) return;
+        if (mMicFallbackDone || mRoute != Route.BLUETOOTH || !onlyPhoneMic(configs) || !bluetoothLinkUp()) return;
         long now = SystemClock.elapsedRealtime();
         if (mLinkUpSince == 0) mLinkUpSince = now;
         if (now - mLinkUpSince < 3000) {
@@ -1054,8 +1062,20 @@ public final class CallManager {
             mMain.postDelayed(mDiagnose, 3000 - (now - mLinkUpSince) + 200);
             return;
         }
-        AudioDeviceInfo dev = configs.get(0).getAudioDevice();
-        if (dev == null || dev.getType() != AudioDeviceInfo.TYPE_BUILTIN_MIC) return;
+        if (mNudged) {
+            // Switching over didn't move the microphone (Android keeps a microphone that
+            // started before the headset's call link on the phone): the voice comes from the
+            // phone anyway. Make that the clean setup - sound in the headset's music profile,
+            // the phone's microphone in normal mode - and say so, instead of a call link
+            // whose microphone isn't used.
+            mMicFallbackDone = true;
+            mUserPicked = false;
+            EventLog.add(mApp, "call audio: the phone's own microphone still records - the headset's microphone"
+                    + " can't be switched on in this call; now " + label(Route.BT_PHONE_MIC));
+            toast(R.string.bt_mic_not_switched);
+            applyRoute(Route.BT_PHONE_MIC);
+            return;
+        }
         mNudged = true;
         EventLog.add(mApp, "call audio: the phone's own microphone records although the call is on the Bluetooth headset;"
                 + " switching the call over once more so the headset's microphone is used");
@@ -1069,6 +1089,16 @@ public final class CallManager {
                 applyRoute(Route.BLUETOOTH);
             }
         }, 800);
+    }
+
+    /** Every microphone recording now is the phone's own (none: false). */
+    private static boolean onlyPhoneMic(List<AudioRecordingConfiguration> configs) {
+        if (configs == null || configs.isEmpty()) return false;
+        for (AudioRecordingConfiguration c : configs) {
+            AudioDeviceInfo dev = c.getAudioDevice();
+            if (dev == null || dev.getType() != AudioDeviceInfo.TYPE_BUILTIN_MIC) return false;
+        }
+        return true;
     }
 
     /** The device the call's sound plays on (Android 13+ can tell), or -1. */

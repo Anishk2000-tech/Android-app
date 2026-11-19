@@ -57,6 +57,7 @@
     <string name="route_bluetooth_both">Bluetooth headset (listen and talk)</string>
     <string name="route_bluetooth_named">%1$s: listen and talk</string>
     <string name="route_bt_phone_mic_named">%1$s: listen only, talk into the phone</string>
+    <string name="bt_mic_not_switched">The Bluetooth headset\'s microphone couldn\'t be switched on during this call. You hear the call in the headset; talk into the phone. Tap the call-audio button to change this.</string>
     <string name="bt_mic_fallback">The Bluetooth headset\'s microphone kept cutting out. You now talk into the phone and still hear the call in the headset. Tap the call-audio button to change this.</string>
     <string name="route_auto">Automatic</string>
 

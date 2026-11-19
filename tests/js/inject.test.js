@@ -1097,7 +1097,7 @@ test('a chat message mentioning a call next to some Dismiss button does not ring
   await ctx.close();
 });
 
-test('the microphone waits for the Bluetooth call link before it opens (at most 2.5 s), then stays open for the call', async (b, base) => {
+test('the microphone waits for the Bluetooth call link before it opens (at most 4 s), then stays open for the call', async (b, base) => {
   const ctx = await b.newContext();
   await ctx.addInitScript(BRIDGE_MOCK.replace("window.__micPolls = 0;", "window.__micPolls = 0; window.__micPrepare = 'wait'; window.__micReadyAfter = 4;"));
   await ctx.addInitScript(script({}));
