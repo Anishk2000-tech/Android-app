@@ -1126,14 +1126,28 @@
       // Covered by something else (the chat list drawn over it) = not on screen.
       return !!top && (top === el || el.contains(top) || top.contains(el));
     };
+    var isSearchBox = function (el) {
+      try {
+        return el.getAttribute('role') === 'combobox' || el.getAttribute('type') === 'search'
+          || !!(el.closest && el.closest('[role="search"],[role="combobox"]'));
+      } catch (e) { return false; }
+    };
     var convoOnScreen = function () {
       var marks = document.querySelectorAll(CONVO_MARKS);
       for (var i = 0; i < marks.length; i++) if (seenOnScreen(marks[i])) return true;
-      var eds = document.querySelectorAll('[contenteditable="true"],[contenteditable=""],textarea');
+      // The user is typing into a message box (whatever its language or markup): a
+      // conversation is open. (Not a search box.)
+      var ae = document.activeElement;
+      if (ae && ae !== document.body && (ae.isContentEditable || ae.tagName === 'TEXTAREA')
+          && !isSearchBox(ae) && seenOnScreen(ae)) return true;
+      var eds = document.querySelectorAll('[contenteditable="true"],[contenteditable=""],textarea,.ck-editor__editable');
       for (var j = 0; j < eds.length; j++) {
         var e = eds[j];
+        if (isSearchBox(e)) continue;
         var lab = (e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('placeholder') || '') + ' ' + (e.getAttribute('data-tid') || '');
-        if (COMPOSE_LABEL.test(lab) && seenOnScreen(e)) return true;
+        // Teams' message box is a CKEditor: its class names are the same in every language.
+        var ck = !!(e.classList && e.classList.contains('ck-editor__editable'));
+        if ((ck || COMPOSE_LABEL.test(lab)) && seenOnScreen(e)) return true;
       }
       return false;
     };

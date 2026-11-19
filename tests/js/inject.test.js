@@ -978,6 +978,43 @@ test('Teams chat list: the last-opened chat is not "open" (hidden, unfocused) un
   await ctx.close();
 });
 
+test('Teams chat list: a conversation in any language counts as open (its message box by the editor class, or being typed in); a search box does not', async (b, base) => {
+  // No data-tid marks and labels in languages the label check doesn't know.
+  PAGES['/teams-intl.html'] = `<!doctype html><html><head><title>Teams</title><style>
+      body{margin:0} #convo,#list{position:absolute;left:0;top:0;width:400px;height:600px} #convo{background:#fff} #list{background:#eee}
+      .box{height:40px;margin-top:8px}
+    </style></head><body>
+    <div id="convo"><div style="height:60px">アリス: こんにちは</div>
+      <div id="ck" class="ck ck-content ck-editor__editable ck-editor__editable_inline" contenteditable="true" aria-label="メッセージを入力" style="height:40px"></div></div>
+    <div id="list" style="display:none"><div role="treeitem" style="height:50px">アリス</div>
+      <div role="search"><div id="search" class="box" contenteditable="true" aria-label="検索"></div></div>
+      <div id="plain" class="box" contenteditable="true" aria-label="संदेश लिखें"></div></div>
+    </body></html>`;
+  const { ctx, page } = await newPage(b, base.replace('127.0.0.1', 'teams.wd-test'), {}, '/teams-intl.html');
+  const r = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    await wait(1400);
+    const ckOpen = document.visibilityState;
+    // The list on top; its own boxes: an unknown-language box and a search box, not typed in.
+    document.getElementById('convo').style.display = 'none';
+    document.getElementById('list').style.display = '';
+    await wait(1400);
+    const listShown = document.visibilityState;
+    document.getElementById('search').focus();
+    await wait(1400);
+    const searching = document.visibilityState;
+    document.getElementById('plain').focus();
+    await wait(800);
+    const typing = document.visibilityState;
+    return { ckOpen, listShown, searching, typing };
+  });
+  assert.strictEqual(r.ckOpen, 'visible', "Teams' message box (CKEditor) on screen, in Japanese: a chat is open");
+  assert.strictEqual(r.listShown, 'hidden', 'only the list (and boxes nobody types in): hidden');
+  assert.strictEqual(r.searching, 'hidden', 'typing a search: still the list');
+  assert.strictEqual(r.typing, 'visible', 'typing into a message box in any language: a chat is open');
+  await ctx.close();
+});
+
 test('Teams chat list: no hiding while a call is going on', async (b, base) => {
   const { ctx, page } = await newPage(b, base.replace('127.0.0.1', 'teams.wd-test'), {}, '/teams-list.html');
   const r = await page.evaluate(async () => {
