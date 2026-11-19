@@ -242,6 +242,13 @@ setup screen; both tabs load; keep-alive foreground service (with microphone + c
 
 **Single-app editions 1.0.1, verified on all three emulators (Android 15, 14, 12):** Teams' page failing with *net::ERR_FAILED* (on Android 14 and 15 it happened on its own, from Teams' service worker; Android reported neither an error nor a page load for it). The app spotted Android's error page, loaded Teams again, removed the service worker (the replacement worker was served and removed it), turned service workers off for Teams, then showed its own *Can't load this page* screen with **Retry** - and **Retry** brought Teams back. All other single-app checks passed as in 1.0.0. Known open item in WorkDeck itself (not the single-app editions): on Android 14/15 it occasionally stopped responding while waiting for the screen to draw; to be fixed when these fixes go into WorkDeck.
 
+**Single-app editions 1.0.3, verified on all three emulators (Android 15, 14, 12), in OMC Teams:**
+* five chat notifications that mention a call (*"call"*, *"Call me"*, *"Can you call me later?"*, *"Missed call from Bob"*, *"calling you in 5 min"*), all marked important the way Teams marks chat notifications, rang **0** times and were shown as messages; a real *"Incoming call"* still rang;
+* Teams' read receipt (*consumptionhorizon*, on a stand-in chat page) was **kept back** with the app in the background and with the app open while Teams showed its chat list with the last chat still selected - and **went through** to Microsoft (answer 401, the test isn't signed in) while a chat was on screen; also when Teams' service worker sends it;
+* the page-side checks (Chromium): the chat list is recognised in any language, never while a call is on, never on the sign-in page or when joining a meeting; the microphone waits for the Bluetooth call link and stays open through Teams re-opening it.
+
+**Not testable here:** Bluetooth itself - the emulators have no Bluetooth. Each step of a call (devices, call link up/down, which microphone records, where the sound plays) goes into the activity log; hold **Reload** in the **Aa** panel after a bad call to share it.
+
 **Single-app editions 1.0.2, verified on all three emulators (Android 15, 14, 12), in OMC Outlook:**
 * a page that heads for Microsoft's sign-out address with nobody touching the app is **not followed**, and Outlook is loaded again (the sign-out page is never contacted);
 * the same from a hidden frame (how one Microsoft page signs the others out) is not carried out either, and doesn't cause a reload loop;
